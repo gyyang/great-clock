@@ -52,15 +52,19 @@ class Assembly {
   constructor(name, note) { this.name = name; this.note = note; this.nodes = []; this.index = new Map(); this.members = []; this.masses = []; this.forces = []; this.rests = []; this.braces = []; }
   node(p) { const k = key(p); if (!this.index.has(k)) { this.index.set(k, this.nodes.length); this.nodes.push({ p: [...p] }); } return this.index.get(k); }
   // kind: 'beam' (default), 'tie' (rod: carries tension only), 'strut'
-  member(a, b, section, material = MATERIAL.steel, kind = 'beam', label = '') {
+  // lout: for a member braced sideways less often than it is jointed, the length over which
+  // it can buckle out of its plane (otherwise each piece between joints is taken as braced)
+  // carries: a load spread along it, N per metre, beyond its own weight (the wall standing on a girder)
+  member(a, b, section, material = MATERIAL.steel, kind = 'beam', label = '', lout = 0, carries = 0) {
     if (Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) < 2 * SNAP) return this;
-    this.members.push({ a: this.node(a), b: this.node(b), section, material, kind, label });
+    this.members.push({ a: this.node(a), b: this.node(b), section, material, kind, label, lout, carries });
     return this;
   }
   mass(p, kg, label = '') { this.masses.push({ n: this.node(p), kg, label }); return this; }
   force(p, f, label = '') { this.forces.push({ n: this.node(p), f, label }); return this; }
   // This point is held by `on`: 'ground', 'wall', or the name of another assembly.
-  // hold: 'pin' stops it moving; 'fix' also stops it turning (built in).
+  // hold: 'pin' stops it moving; 'fix' also stops it turning (built in); or the axes it is held
+  // along, e.g. 'yz' for a bearing that is free to slide in x (one end of every long span is).
   rest(p, on, hold = 'pin') { this.rests.push({ n: this.node(p), on, hold }); return this; }
   // This point is kept from moving along one axis ('x', 'y' or 'z') by something that carries
   // no weight from it: the purlins that stop a truss falling over sideways, for instance.
@@ -96,6 +100,19 @@ function split(A) {
   A.members = out;
 }
 
+// Where a load lands on an assembly that takes whatever is brought to it within reach (a
+// wall frame: things bear on the nearest column or girder, not on a point named in advance).
+function nearest(A, p) {
+  let best = p, bd = A.reach;
+  for (const m of A.members) {
+    const a = A.nodes[m.a].p, b = A.nodes[m.b].p, d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const t = Math.min(1, Math.max(0, ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1] + (p[2] - a[2]) * d[2]) / (d[0] * d[0] + d[1] * d[1] + d[2] * d[2])));
+    const q = [a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t], dist = Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]);
+    if (dist < bd) { bd = dist; best = q; }
+  }
+  return best;
+}
+
 // How hard one member is working, as a fraction of what it can take.
 function utilisation(m, F) {
   const s = m.section, mat = m.material;
@@ -105,7 +122,7 @@ function utilisation(m, F) {
   let u = (axial + bend) / allow, why = bend > axial ? 'bending' : F.N < 0 ? 'compression' : 'tension';
   if (F.N < 0) {
     if (m.kind === 'tie' && -F.N > 0.02 * s.A * mat.f) return { u: Infinity, why: 'a rod cannot push', stress: axial };
-    const Pcr = Math.PI ** 2 * mat.E * Math.min(s.Iy, s.Iz) / F.L ** 2 / BUCKLING_FACTOR;
+    const Pcr = Math.PI ** 2 * mat.E * (m.lout ? Math.min(s.Iz / F.L ** 2, s.Iy / m.lout ** 2) : Math.min(s.Iy, s.Iz) / F.L ** 2) / BUCKLING_FACTOR;
     if (m.kind !== 'tie' && -F.N / Pcr > u) { u = -F.N / Pcr; why = 'buckling'; }
   }
   return { u, why, stress: axial + bend };
@@ -132,11 +149,11 @@ export function analyse() {
       for (const t of A.solved.out) { if (terminal[t.on]) terminal[t.on].push(t); else if (assemblies.has(t.on)) assemblies.get(t.on).incoming.push({ p: t.p, f: t.f, label: A.name }); }
       continue;
     }
-    for (const inc of A.incoming) A.forces.push({ n: A.node(inc.p), f: inc.f, label: inc.label, transferred: true });
+    for (const inc of A.incoming) A.forces.push({ n: A.node(A.reach ? nearest(A, inc.p) : inc.p), f: inc.f, label: inc.label, transferred: true });
     if (A.incoming.length) { A.cut = false; split(A); A.cut = true; }
     const nodes = A.nodes.map(nd => ({ p: nd.p, fix: null }));
     for (const r of A.rests) {
-      nodes[r.n].fix = r.hold === 'fix' ? [1, 1, 1, 1, 1, 1] : [1, 1, 1, 0, 0, 0];
+      nodes[r.n].fix = r.hold === 'fix' ? [1, 1, 1, 1, 1, 1] : r.hold === 'pin' ? [1, 1, 1, 0, 0, 0] : [+r.hold.includes('x'), +r.hold.includes('y'), +r.hold.includes('z'), 0, 0, 0];
       // A lone member on simple bearings is free to spin about its own axis: a mechanism on
       // paper, of no interest in practice. Where only one line of members reaches a bearing,
       // the bearing also stops it turning about that line.
@@ -148,8 +165,8 @@ export function analyse() {
     let weight = 0, carried = 0;
     const members = A.members.map((m) => {
       const pa = nodes[m.a].p, pb = nodes[m.b].p, L = Math.hypot(pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]);
-      const w = m.material.rho * m.section.A * GRAVITY;                    // N per metre
-      loads[6 * m.a + 1] -= w * L / 2; loads[6 * m.b + 1] -= w * L / 2; weight += w * L;
+      const own = m.material.rho * m.section.A * GRAVITY, w = own + (m.carries || 0);      // N per metre
+      loads[6 * m.a + 1] -= w * L / 2; loads[6 * m.b + 1] -= w * L / 2; weight += own * L; carried += (m.carries || 0) * L;
       const flat = Math.hypot(pb[0] - pa[0], pb[2] - pa[2]);
       return { a: m.a, b: m.b, E: m.material.E, G: m.material.G, ...m.section, axial: m.kind === 'tie', selfM: w * (flat / L) * L * L / 8 };      // its own weight bends it between its ends
     });

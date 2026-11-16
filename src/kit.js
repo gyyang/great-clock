@@ -419,6 +419,13 @@ export function beam(mat, a, b, h = 0.2, w = 0.2) {
   ibox(mat, f.len, h, w, f.mx, f.my, f.mz, f.q);
 }
 
+// The same, and solid to walk into.
+export function sbeam(mat, a, b, h = 0.2, w = 0.2) {
+  const f = frame(a, b);
+  ibox(mat, f.len, h, w, f.mx, f.my, f.mz, f.q);
+  return cbox(f.len, h, w, f.mx, f.my, f.mz, f.q);
+}
+
 // A round bar between two points.
 export function tube(mat, a, b, r) {
   const f = frame(a, b);

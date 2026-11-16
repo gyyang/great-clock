@@ -62,35 +62,45 @@ leave a crate where the pendulum's rating nut sweeps the floor.
 
 ## Does it stand up?
 
-Yes, by calculation, and the game can check itself. As each part of the building is drawn it also declares what it
-is structurally: its members with their real sections and materials, the masses it carries, and what it rests on.
-`__game.check()` in the browser console then does an engineer's load take-down over the whole scene: it solves each
-assembly as a 3-D frame by the stiffness method (`src/structure/solve.js`), drops any tie that would have to push,
-checks every member for stress and buckling, and hands the reactions down to whatever carries that assembly, ending
-at the walls. It reports, per assembly, whether it holds, the member working hardest and by what factor, or the
-point at which it is attached to nothing. `npm test` checks the solver against textbook cases.
+By calculation, yes, and the game can check itself. The aim is a building that could actually be built.
 
-The wheels are solid brass castings and weigh what that weighs: the great wheel 17,000 t, the going train about
-84,000 t with its arbors, pendulum and driving weight. Nothing of the 1890s carries that across a 140 m hall (run on
-a period structure, the check found tie rods overloaded 57 times and roof trusses over 100 times), so what carries
-the wheels is modern:
+As each part is drawn it also declares what it is structurally: its members with their real sections and materials,
+the masses it carries, and what it rests on. `__game.check()` in the browser console then does an engineer's load
+take-down over the whole scene: it solves each assembly as a 3-D frame by the stiffness method
+(`src/structure/solve.js`), drops any tie that would have to push, checks every member for stress and buckling, and
+hands the reactions down to whatever carries that assembly, ending at the ground. It reports, per assembly, whether
+it holds, the member working hardest and by what factor, or the point at which it is attached to nothing.
+`npm test` checks the solver against textbook cases.
 
-- **Alloy steel** (450 MPa working stress) for everything that bends or is squeezed: arbors, girders, purlins, trusses.
-- **Carbon-fibre tendons** (1,100 MPa) for everything that hangs.
-- **Prestressed ultra-high-performance concrete** behind the brick facing of the shell (60 MPa).
+The structure is designed by the same analysis that checks it (`src/world/structure.js`): declare, analyse, enlarge
+whatever is overworked, repeat until everything holds, and only then draw. So the sizes are the ones the loads asked for.
 
-The structure is designed by the same analysis that checks it (`src/world/structure.js`). Each bearing sits on a
-plate girder; either side of it a tendon goes straight up to the roof, along a line found by casting rays through
-the physics world until one clears every wheel. Each tendon hangs from a box purlin of its own, the purlins sit on
-the roof trusses, and the trusses take it to the walls. The designer declares all that, runs the analysis, enlarges
-whatever is overworked and repeats until everything holds; only then is it drawn. So the sizes you see are the ones
-the loads asked for: the girder under the great wheel is 4 m deep and the one under the minute wheel 1.6 m, and the
-two roof trusses nearest the dial have rafters over 4 m deep where the one at the back has 0.9 m.
+**The wheels stand on the floor.** They are solid brass castings and weigh what that weighs: the great wheel
+17,000 t, the going train about 84,000 t with its arbors, pendulum and driving weight. Under each bearing stands an
+A-frame of alloy-steel box sections (450 MPa working stress), in the gap between two layers of wheels, and the two
+frames of each arbor are strutted together wherever a strut can pass between the wheels: one braced tower per arbor.
+Where a member would foul a wheel, a walkway, the swing of the pendulum or the fall of the driving weight it is left
+out (found by casting rays through the physics world), and what remains is sized for the frame that is actually
+there. A leg is up to 3 m thick where there is room and thins to a blade between wheels. Each stands on a stone
+plinth sized for the ground under it. The six towers weigh about 31,000 t; the one under the great wheel is half of
+that, because its bracing leaves a shaft open for the driving weight to fall through.
 
-In all, the walls carry about 135,000 t, of which 52,000 t is the structure itself.
+**The shell is a steel frame with brick between.** Brick cannot carry 240 m of itself (5 MPa at the foot against
+the 2 MPa it is good for). So columns stand every 10 m in each wall and a girder runs round at every 30 m level;
+each girder carries the panel of brick above it, and no brick holds up more than its own 30 m (0.6 MPa). The
+girders are as wide as the wall is thick and span sideways to the side walls against the wind; diagonal bracing in
+every bay takes it down to the ground; a steel ring carries the front wall over the dial. Long spans (roof trusses,
+crossings) have one fixed bearing and one free to slide, so they do not push the walls apart.
 
-Not in the model yet: stairs, galleries, the lift cage, the pendulum landings and the ledge outside. The shell is
-checked by formula (compression at its foot, a vertical strip in the wind, bearing under the pads), not as a frame.
+**The roof** carries only itself and the walkways, which hang from it on carbon-fibre rods.
+
+In round numbers the ground carries 595,000 t: about 390,000 t of brick, 110,000 t of steel in the shell frame,
+84,000 t of clock and 31,000 t of towers. Most of that is the brick, because the panels are drawn 2 m thick; a
+real design would make them a quarter of that with intermediate rails, and the frame would shrink with them.
+
+What the check does not cover, and a real design would need: wind from the side and on the towers, earthquake,
+fatigue, the connections, the foundations below the plinths, and how any of it would be erected. Stairs, galleries,
+the lift cage, the pendulum landings and the ledge outside are not in the model yet.
 
 ## Layout
 
@@ -109,7 +119,7 @@ src/
   audio.js            all sound, synthesised
   world/
     tower.js          the building: shell, galleries, stairs, crossings
-    structure.js      the engineer: sizes girders, tendons and the roof by analysis, then draws them
+    structure.js      the engineer: plans a tower under each arbor, sizes it and the roof by analysis, draws them
     city.js           the town outside, generated from a seed
     props.js          loose crates, barrels and shot
     env.js            renderer, light, shadow, haze, sky

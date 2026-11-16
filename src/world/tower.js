@@ -25,9 +25,7 @@ function shell() {
   tbox(MAT.brick, wall, H, 2 * hz, -hx - wall / 2, H / 2, 0);
   tbox(MAT.brick, wall, H, 2 * hz, hx + wall / 2, H / 2, 0);
   tbox(MAT.slate, 2 * ox, wall, 2 * oz, 0, H + wall / 2, 0);
-  // brick piers break up the walls and give the light something to rake across
-  for (const x of [-60, -40, -20, 0, 20, 40, 60]) tbox(MAT.brick, 3, H, 0.9, x, H / 2, -hz + 0.45);
-  for (const sx of [-1, 1]) for (const z of [-22, 0, 22]) tbox(MAT.brick, 0.9, H, 3, sx * (hx - 0.45), H / 2, z);
+  // (the brick is panels in a steel frame: columns every 10 m and a girder at every 30 m level, drawn by structure.js)
 
   // Front wall: a ground door, the dial opening, and two doors out to the ledge.
   const sh = new THREE.Shape();
@@ -62,10 +60,9 @@ function shell() {
 
   // Facade relief. The windows are person-sized: they are what tells you how big the dial is.
   const zf = hz + wall;
-  for (const x of [-70.5, -62, 62, 70.5]) ibox('stone', 3, H, 1.2, x, H / 2, zf + 0.6);
-  for (const y of [70, 86, 214, 236]) ibox('stone', 2 * ox + 1, 2, 1.4, 0, y, zf + 0.7);
   for (let y = 8; y <= 62; y += 9) for (let x = -54; x <= 54; x += 6) {
     if (Math.abs(x) < 4 && y < 12) continue;
+    if (Math.abs(x - Math.round(x / 10) * 10) < 2 || Math.abs(y - Math.round(y / 30) * 30) < 3.5) continue;     // not where a column or a girder runs
     ibox('stone', 1.9, 3.6, 0.3, x, y, zf + 0.1); ibox('window', 1.3, 3, 0.3, x, y, zf + 0.16);
   }
 }
@@ -152,9 +149,9 @@ function latticeGirder(name, y, z, width, wallAt = null) {
     if (k === 0) ibox('iron', 0.34, 0.3, 0.02, xa, top - 0.1, z);                           // gusset where a hanger takes the load
     A.mass([xa, lo, z], deckLoad * (xb - xa), 'deck');
   }
-  for (const x of [x0, x1]) A.rest([x, lo, z], 'wall').rest([x, top, z], 'wall');
+  A.rest([x0, lo, z], 'shell left').rest([x1, lo, z], 'shell right', 'yz');              // by way of the side galleries; one end fixed, the other free to slide
   // an edge that runs along a wall sits on corbels built into it, wherever there is wall to build into
-  if (wallAt) for (let x = ROOF.purlins[0]; x < x1; x += 2 * PANEL) if (wallAt(x)) { A.rest([x, lo, z], 'wall'); ibox('stone', 0.5, 0.7, 0.9, x, lo - 0.55, z + 0.25); }
+  if (wallAt) for (let x = ROOF.purlins[0]; x < x1; x += 2 * PANEL) if (wallAt(x)) { A.rest([x, lo, z], 'shell front'); ibox('stone', 0.5, 0.7, 0.9, x, lo - 0.55, z + 0.25); }
   EDGES.push({ name: A.name, y: top + 0.06, yc: top, z });
 }
 

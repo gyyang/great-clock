@@ -190,7 +190,7 @@ export function buildClockwork() {
       const sh = SHAFT[name], a = ARBOR[name], A = assembly(`arbor ${name}`, 'alloy-steel shaft on two bearings');
       A.member([a.x, a.y, sh.z[0]], [a.x, a.y, sh.z[1]], SECTION.round(sh.r), MATERIAL.alloy, 'beam', 'arbor');
       for (const [z, kg, label] of loads) A.mass([a.x, a.y, z], kg, label);
-      for (const z of sh.bearings) A.rest([a.x, a.y, z], `girder ${name} ${z}`);
+      for (const z of sh.bearings) A.rest([a.x, a.y, z], `tower ${name}`);
     }
   }
 
