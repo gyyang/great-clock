@@ -46,10 +46,15 @@ export const STAIRS = { xa: -56, xb: -8, zA: -33.75, zB: -31.25, width: 2.3, pad
 export const LIFT = { xu: 30, xd: 36, z: -33, hx: 2.4, hz: 2, top: 186, x0: 27.5, x1: 38.5, z0: -35, z1: -31 };
 export const BRIDGES = {
   escapement: { y: 90, z0: -7.75, z1: -4.75 },
-  centre: { y: 150, z0: 8.5, z1: 11.5 },
-  between: { y: 120, z0: 15.8, z1: 18.8 },
+  centre: { y: 150, z0: 8.7, z1: 11.3 },
+  between: { y: 120, z0: 16.1, z1: 18.6 },
   balcony: { y: 120, z0: 36, z1: 40 },
 };
+// Roof: trusses rise from the wall heads to the ridge; purlins run front to back on them
+// every 8.75 m. Whatever cannot stand on the floor or bear on a wall hangs from a purlin.
+export const ROOF = { eaves: 219, ridge: 237, purlins: Array.from({ length: 15 }, (_, i) => -61.25 + i * 8.75) };
+ROOF.at = (x) => ROOF.eaves + (ROOF.ridge - ROOF.eaves) * (1 - Math.abs(x) / TOWER.hx);
+
 export const LEDGE = { y: 120, z0: 42, z1: 45, hx: 58, doorX: 52 };
 
 // Where the bob's riding deck comes to rest at the top of its swing.

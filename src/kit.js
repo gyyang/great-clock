@@ -340,7 +340,7 @@ export const ibox = (mat, sx, sy, sz, x, y, z, q) => push('box', mat, sx, sy, sz
 export const icyl = (mat, r, h, x, y, z, q) => push('cyl', mat, r, h, r, x, y, z, q);
 export const isph = (mat, r, x, y, z) => push('sph', mat, r, r, r, x, y, z);
 const irod = (mat, r, h, x, y, z) => push('rod', mat, r, h, r, x, y, z);        // vertical, centred on y
-const iknob = (mat, r, x, y, z) => push('knob', mat, r, r, r, x, y, z);
+export const iknob = (mat, r, x, y, z) => push('knob', mat, r, r, r, x, y, z);
 
 export function flushBatches() {
   for (const b of batches.values()) {
