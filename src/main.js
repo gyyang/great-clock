@@ -3,6 +3,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { createEnv } from './world/env.js';
 import { initKit, flushBatches, MAT } from './kit.js';
 import { buildTower } from './world/tower.js';
+import { buildCity } from './world/city.js';
 import { buildProps } from './world/props.js';
 import { buildClockwork } from './clock/clockwork.js';
 import { buildEngine } from './engine/engine.js';
@@ -23,6 +24,7 @@ async function main() {
   const env = createEnv(canvas);
   initKit(env.scene, world, RAPIER, env.renderer);
   buildTower();
+  const city = buildCity();
   const clock = buildClockwork();
   const engine = buildEngine(clock, env.scene);
   const props = buildProps(clock.floor);
@@ -31,7 +33,7 @@ async function main() {
   env.scene.traverse((o) => {
     if (!o.isMesh) return;
     const m = Array.isArray(o.material) ? o.material[0] : o.material;
-    if (!m.isMeshStandardMaterial || m === MAT.dial || m === MAT.city || m === MAT.ground) return;
+    if (!m.isMeshStandardMaterial || m === MAT.dial || m === MAT.ground || m.userData.outdoor) return;   // the town is outside the dial light's reach
     o.castShadow = true; o.receiveShadow = true;
   });
 
@@ -97,6 +99,7 @@ async function main() {
     if (e.code === 'KeyR') go(0);
     if (e.code === 'KeyM') say(sound.toggleMute() ? 'Muted' : 'Sound on');
     if (e.code === 'KeyQ') { autoQuality = false; say(['Detail: low', 'Detail: medium', 'Detail: high'][env.setQuality((env.quality + 2) % 3)]); }
+    if (e.code === 'KeyL') say(env.toggleLantern() ? 'Lantern lit' : 'Lantern out');
     if (e.code === 'KeyE') { const done = engine.use(player.position); if (done) say(done); }
     if (/^Digit[1-7]$/.test(e.code)) go(+e.code.slice(5) - 1);
   });
@@ -172,7 +175,7 @@ async function main() {
   requestAnimationFrame(frame);
 
   // handy from the console
-  window.__game = { RAPIER, player, clock, engine, props, env, world, sound, go, SPOTS,
+  window.__game = { RAPIER, player, clock, engine, props, env, world, sound, go, SPOTS, city,
     advance: (sec) => { for (let i = 0; i < sec / DT; i++) { clock.update(DT); engine.update(DT); props.step(); player.step(DT); world.step(); } }, look: (yaw, pitch) => { player.yaw = yaw; player.pitch = pitch; },
     // stand at p, look along (yaw, pitch) and draw one frame: for screenshots while the page is in the background
     shot: (p, yaw, pitch = 0) => {

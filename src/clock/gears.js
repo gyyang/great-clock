@@ -107,7 +107,7 @@ export function gearGeometry(s, outline) {
     if (s.spokes) spokeHoles(web, s, s.hubR + 0.5, s.rimIn - 0.45);
     parts.push(extrude(web, s.t * (s.spokes ? 0.5 : 0.68), 0.06, cs(s.rimIn), 1));
     const h = s.t * 0.64, c = Math.min(0.22, h * 0.3), R = s.hubR;
-    parts.push(planarUV(new THREE.LatheGeometry([[0.01, h], [R - c, h], [R, h - c], [R, -h + c], [R - c, -h], [0.01, -h]].map(p => new THREE.Vector2(p[0], p[1])), 56).rotateX(Math.PI / 2)));
+    parts.push(planarUV(new THREE.LatheGeometry([[0.01, -h], [R - c, -h], [R, -h + c], [R, h - c], [R - c, h], [0.01, h]].map(p => new THREE.Vector2(p[0], p[1])), 56).rotateX(Math.PI / 2)));
   }
   const merged = mergeGeometries(parts.map(g => (g.index ? g.toNonIndexed() : g)));
   return toCreasedNormals(merged, 0.7);

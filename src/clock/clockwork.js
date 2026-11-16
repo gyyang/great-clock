@@ -104,8 +104,9 @@ export function buildClockwork() {
     // the bob: a brass lens, turned on a lathe
     const bR = PEND.bobR, prof = [];
     const hAt = (r) => 0.3 + 1.25 * Math.sqrt(Math.max(0, 1 - (r / bR) ** 2)) + 0.2 * Math.exp(-(((r - 0.8 * bR) / 0.28) ** 2)) + 0.3 * Math.exp(-((r / 1.5) ** 4));
-    for (let i = 0; i <= 40; i++) { const r = Math.max(0.01, bR * i / 40); prof.push(new THREE.Vector2(r, hAt(r))); }
-    for (let i = 40; i >= 0; i--) { const r = Math.max(0.01, bR * i / 40); prof.push(new THREE.Vector2(r, -hAt(r))); }
+    // a lathe profile has to run from the bottom up for its surface to face outward
+    for (let i = 0; i <= 40; i++) { const r = Math.max(0.01, bR * i / 40); prof.push(new THREE.Vector2(r, -hAt(r))); }
+    for (let i = 40; i >= 0; i--) { const r = Math.max(0.01, bR * i / 40); prof.push(new THREE.Vector2(r, hAt(r))); }
     const bob = new THREE.Mesh(planarUV(new THREE.LatheGeometry(prof, 128).rotateX(Math.PI / 2)), MAT.brass);
     bob.position.set(0, -L, pz); g.add(bob);
     rivetRing(g, 5.2, 28, 1.3, 0.22).position.set(0, -L, pz);
@@ -195,7 +196,7 @@ export function buildClockwork() {
     const hourShape = new THREE.Shape([[-1.6, -8], [1.6, -8], [2.6, 0], [3.6, 18], [1.7, 30], [0, 34], [-1.7, 30], [-3.6, 18], [-2.6, 0]].map(p => new THREE.Vector2(...p)));
     const mk = (rotor, shape, z, zShadow, len) => {
       const holder = new THREE.Group(); holder.rotation.z = -rotor.c; rotor.group.add(holder);
-      const hand = new THREE.Mesh(extrude(shape, 0.7, 0.14, 10, 2), MAT.iron); hand.position.z = z; holder.add(hand);
+      const hand = new THREE.Mesh(extrude(shape, 0.7, 0.14, 10, 2), MAT.rail); hand.position.z = z; holder.add(hand);
       const sh = new THREE.Mesh(new THREE.ShapeGeometry(shape), MAT.shadow); sh.position.z = zShadow; holder.add(sh);
       const boss = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 3.4, 1.0, 32).rotateX(Math.PI / 2), MAT.bronze); boss.position.z = z; holder.add(boss);
       const a = Math.PI / 2 - rotor.c;   // direction the hand points in the rotor's own frame

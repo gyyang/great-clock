@@ -10,7 +10,7 @@ import { TOWER, DIAL } from '../layout.js';
 import { MAT, TEX } from '../kit.js';
 
 const IN = { fog: new THREE.Color(0x1a130c), density: 0.0046, hemi: 0.42, fill: 0.3, key: 2.3, exposure: 1.2 };
-const OUT = { fog: new THREE.Color(0xc9925f), density: 0.0016, hemi: 0.7, sun: 1.9, exposure: 0.9 };
+const OUT = { fog: new THREE.Color(0xc9925f), density: 0.0016, hemi: 0.7, sun: 1.9, exposure: 1.5 };   // (the grade's eye adaptation stops this down again)
 
 const SKY_FRAG = `
   varying vec3 vDir; uniform vec3 sunDir;
@@ -80,7 +80,8 @@ export function createEnv(canvas) {
   key.shadow.camera.near = keyDist - 40; key.shadow.camera.far = keyDist + 150;
   key.shadow.bias = -0.0002; key.shadow.normalBias = 0.07; key.shadow.radius = 2.5;
 
-  const lantern = new THREE.PointLight(0xffb066, 40, 34, 2); scene.add(lantern);    // carried by you
+  const lantern = new THREE.PointLight(0xffb066, 0, 34, 2); scene.add(lantern);     // a hand lantern you can light (L); out by default
+  let lit = false;
   for (const [x, y, z, col, power] of [[44, 14, 12, 0xffa050, 420], [-45, 4, -13, 0xff6a28, 260], [0, 26, -26, 0xffa860, 520], [33, 9, -26, 0xffa050, 200]]) {
     const p = new THREE.PointLight(col, power, 75, 2); p.position.set(x, y, z); scene.add(p);
   }
@@ -157,7 +158,7 @@ export function createEnv(canvas) {
     key.intensity = IN.key * (1 - k); key.visible = k < 0.985;
     post.shafts.strength = 1 - k;
     scene.environment = k > 0.5 ? envOut : envIn;
-    lantern.intensity = 40 * (1 - k);
+    lantern.intensity = lit ? 40 * (1 - k) : 0;
     lantern.position.set(camera.position.x, camera.position.y - 0.4, camera.position.z);
     renderer.toneMappingExposure = mix(IN.exposure, OUT.exposure);
     if (MAT.dial) MAT.dial.emissiveIntensity = 1.0 - 0.72 * k;      // lit from behind indoors, by daylight outdoors
@@ -166,5 +167,5 @@ export function createEnv(canvas) {
     return k;
   }
 
-  return { renderer, scene, camera, post, update, setQuality, get quality() { return quality; }, render: post.render };
+  return { renderer, scene, camera, post, update, setQuality, toggleLantern: () => (lit = !lit), get quality() { return quality; }, render: post.render };
 }

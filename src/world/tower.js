@@ -1,8 +1,7 @@
 // The static building: shell, galleries, stairs, lift cage, bridges, the dial,
-// the iron frame that carries the arbors, and the world outside.
+// and the iron frame that carries the arbors. The town outside is city.js.
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { G, MAT, QX, mulberry32, ibox, icyl, cbox, sbox, tbox, tplane, boxGeo, beam, deck, rail, railRun, stair, lamp, cagePanel } from '../kit.js';
+import { G, MAT, QX, ibox, icyl, cbox, sbox, tbox, tplane, beam, deck, rail, railRun, stair, lamp, cagePanel } from '../kit.js';
 import { TOWER, LEVELS, DIAL, ARBOR, STAIRS, LIFT, BRIDGES, LEDGE, DEG, bobLanding } from '../layout.js';
 
 const TAU = Math.PI * 2;
@@ -203,22 +202,6 @@ function decor() {
   icyl('bronze', 1.2, 0.6, bx, 11.4, bz);
 }
 
-function city() {
-  const rand = mulberry32(11), geos = [];
-  for (let i = 0; i < 420; i++) {
-    const a = rand() * TAU, dist = 170 + Math.pow(rand(), 1.4) * 1300;
-    const x = Math.cos(a) * dist, z = Math.sin(a) * dist;
-    const w = 14 + rand() * 40, dpt = 14 + rand() * 40, h = 6 + Math.pow(rand(), 3) * 60;
-    const g = boxGeo(w, h, dpt, 16), uv = g.attributes.uv;
-    for (let k = 8; k < 12; k++) uv.setXY(k, 0.02, 0.98);            // roofs: no windows
-    g.translate(x, h / 2, z); geos.push(g);
-    ibox('stone', w + 0.8, 0.5, dpt + 0.8, x, h + 0.25, z);          // parapet
-    if (dist < 600) cbox(w, h, dpt, x, h / 2, z);
-    if (i % 12 === 0) { const ch = h + 30 + rand() * 60; icyl('stone', 1.4 + rand() * 1.6, ch, x + w * 0.3, ch / 2, z + dpt * 0.3); }
-  }
-  G.scene.add(new THREE.Mesh(mergeGeometries(geos), MAT.city));
-}
-
 export function buildTower() {
-  shell(); galleries(); liftCage(); bridges(); bobLandings(); frame(); trusses(); decor(); city();
+  shell(); galleries(); liftCage(); bridges(); bobLandings(); frame(); trusses(); decor();
 }

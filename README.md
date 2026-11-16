@@ -21,6 +21,7 @@ Then open the URL it prints.
 | 1 – 7 | fast travel: floor, pendulum landing, escapement, between the wheels, behind the dial, the ledge, the engine |
 | R | back to the floor |
 | M | mute |
+| L | light or put out your lantern |
 | Q | detail level (it also steps down by itself if the frame rate drops) |
 
 ## What is real
@@ -43,6 +44,9 @@ There are no image, model or sound files: everything is generated when the page 
 - **Surfaces** – each material is a small program (`src/surface/recipes.js`) run once on the graphics card: real-size bricks on lime mortar, enamelled cast iron, brass with polishing scratches, bolted tread plate. They are laid onto every part in true metres, so nothing stretches. A tile holds only grain; anything you would recognise the second time is computed from where the point is on the part (`src/surface/material.js`): the firing of each individual brick, the dulling of brass in patches, damp at the foot of a wall. Nothing repeats.
 - **A clock that is looked after** – the castings are in green enamel with gold lining, as on a real tower-clock movement; the brass is dull rather than tarnished; nothing is rusting. (The materials can corrode: `weather` in `surface()` breaks out rust or verdigris in spots and runs it down upright faces. Nothing uses it.)
 - **Light shafts** – daylight through the dial is marched through the air against the same shadow map that lights the hall, so the beams carry the shadows of the hands, the tracery and every wheel they pass.
+- **The town** – generated from a seed (`src/world/city.js`): five districts whose street grids meet at odd angles, terraced rows round their yards with a chimney stack on every party wall, mills with saw-tooth roofs and tall stacks, gasworks, churches, a domed civic building, a river with three bridges, and gas lamps along the streets.
+- **Nothing is quite true** – every part is set a few millimetres and a fraction of a degree off (one place in `kit.js`), handrails run in lengths from baluster to baluster, and stair stringers come in five-metre sections joined by riveted splice plates.
+- **Exposure adapts** – the picture stops down when the view is full of light (behind the dial) and opens up in the dark, over about a second.
 - **Edges** – every box has a chamfer a centimetre wide that catches the light, whatever its size.
 - **Grade** – filmic tone curve, cool shadows and warm highlights, vignette and grain.
 
@@ -72,7 +76,8 @@ src/
   player.js           the character's physics
   audio.js            all sound, synthesised
   world/
-    tower.js          the building and the city outside
+    tower.js          the building: shell, galleries, stairs, bridges, the frame
+    city.js           the town outside, generated from a seed
     props.js          loose crates, barrels and shot
     env.js            renderer, light, shadow, haze, sky
     post.js           ambient occlusion, light shafts, bloom, film grade

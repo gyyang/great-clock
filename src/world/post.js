@@ -68,11 +68,27 @@ const MERGE = /* glsl */`
       float w = (1.0 - 0.3 * float(abs(x) + abs(y))) / (0.02 + abs(lin(texture2D(tDepth, uv).r) - zc) / zc);
       sum += texture2D(tShafts, uv).rgb * w; ws += w;
     }
-    gl_FragColor = vec4(texture2D(tColor, vUv).rgb + sum / ws, 1.0);
+    vec3 s = sum / ws;
+    s /= 1.0 + 0.55 * dot(s, vec3(0.2126, 0.7152, 0.0722));                    // lit air can veil what is behind it, never blot it out
+    gl_FragColor = vec4(texture2D(tColor, vUv).rgb + s, 1.0);
+  }`;
+
+// How bright the picture is on the whole: a log-average over a grid of samples, weighted
+// to the middle of the view, eased toward over about a second. One texel, kept between frames.
+const ADAPT = /* glsl */`
+  uniform sampler2D tColor; uniform sampler2D tPrev; uniform float uRate;
+  void main() {
+    float sum = 0.0, ws = 0.0;
+    for (int y = 0; y < 8; y++) for (int x = 0; x < 12; x++) {
+      vec2 uv = (vec2(float(x), float(y)) + 0.5) / vec2(12.0, 8.0);
+      float w = 1.0 - 0.6 * smoothstep(0.15, 0.6, length(uv - 0.5));
+      sum += log(max(dot(texture2D(tColor, uv).rgb, vec3(0.2126, 0.7152, 0.0722)), 1e-4)) * w; ws += w;
+    }
+    gl_FragColor = vec4(mix(texture2D(tPrev, vec2(0.5)).r, exp(sum / ws), uRate), 0.0, 0.0, 1.0);
   }`;
 
 const GRADE = /* glsl */`
-  uniform sampler2D tColor; uniform float uExposure; uniform float uTime; uniform float uVignette;
+  uniform sampler2D tColor; uniform sampler2D tAdapt; uniform float uKey; uniform float uExposure; uniform float uTime; uniform float uVignette;
   varying vec2 vUv;
   vec3 aces(vec3 x) {                                   // Hill's fit of the ACES reference transform
     x = mat3(0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777) * x;
@@ -84,7 +100,9 @@ const GRADE = /* glsl */`
     vec2 c = vUv - 0.5; float r2 = dot(c, c) * 2.0;
     vec2 off = c * r2 * 0.0035;                                              // the lens splits colour toward the corners
     vec3 col = vec3(texture2D(tColor, vUv + off).r, texture2D(tColor, vUv).g, texture2D(tColor, vUv - off).b);
-    col = aces(col * uExposure / 0.6);
+    // the eye adapts: stop down when the view is full of light, open up a little in the dark
+    float adapt = clamp(pow(uKey / max(texture2D(tAdapt, vec2(0.5)).r, 1e-4), 0.5), 0.3, 1.35);
+    col = aces(col * uExposure * adapt / 0.6);
     float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
     col *= mix(vec3(0.88, 1.0, 1.1), vec3(1.05, 1.0, 0.93), smoothstep(0.03, 0.55, l));   // cool shadows, warm highlights
     col = mix(col, col * col * (3.0 - 2.0 * col), 0.2);                       // a little more contrast in the middle
@@ -117,7 +135,7 @@ class ShaftPass extends Pass {
     this.march = new FullScreenQuad(quadMat(SHAFTS, {
       tDepth: { value: depth }, tShadow: { value: null }, tGlass: { value: null },
       uInvProj: { value: camera.projectionMatrixInverse }, uCamWorld: { value: camera.matrixWorld }, uShadowMatrix: { value: light.shadow.matrix },
-      uLightPos: { value: light.position }, uLightCol: { value: new THREE.Color() }, uDensity: { value: 0.016 }, uMaxDist: { value: 320 }, uTime: { value: 0 },
+      uLightPos: { value: light.position }, uLightCol: { value: new THREE.Color() }, uDensity: { value: 0.012 }, uMaxDist: { value: 320 }, uTime: { value: 0 },
     }));
     this.merge = new FullScreenQuad(quadMat(MERGE, {
       tColor: { value: null }, tShafts: { value: this.half.texture }, tDepth: { value: depth },
@@ -145,11 +163,17 @@ class ShaftPass extends Pass {
 
 class GradePass extends Pass {
   constructor() {
-    super(); this.time = 0;
-    this.quad = new FullScreenQuad(quadMat(GRADE, { tColor: { value: null }, uExposure: { value: 1 }, uTime: { value: 0 }, uVignette: { value: 0.34 } }));
+    super(); this.time = 0; this.first = true;
+    const one = () => new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+    this.lum = [one(), one()];
+    this.meter = new FullScreenQuad(quadMat(ADAPT, { tColor: { value: null }, tPrev: { value: null }, uRate: { value: 1 } }));
+    this.quad = new FullScreenQuad(quadMat(GRADE, { tColor: { value: null }, tAdapt: { value: null }, uKey: { value: 0.07 }, uExposure: { value: 1 }, uTime: { value: 0 }, uVignette: { value: 0.34 } }));
   }
   render(renderer, writeBuffer, readBuffer, dt) {
-    const u = this.quad.material.uniforms;
+    const u = this.quad.material.uniforms, m = this.meter.material.uniforms;
+    m.tColor.value = readBuffer.texture; m.tPrev.value = this.lum[0].texture; m.uRate.value = this.first ? 1 : 1 - Math.exp(-Math.min(dt, 0.1) / 0.9);
+    renderer.setRenderTarget(this.lum[1]); this.meter.render(renderer);
+    this.lum.reverse(); this.first = false; u.tAdapt.value = this.lum[0].texture;
     this.time += dt; u.uTime.value = this.time; u.tColor.value = readBuffer.texture; u.uExposure.value = renderer.toneMappingExposure;
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer); this.quad.render(renderer);
   }
@@ -170,10 +194,11 @@ export function createPost(renderer, scene, camera, keyLight) {
   composer.addPass(shafts);
   const bloom = new UnrealBloomPass(new THREE.Vector2(db.x, db.y), 0.32, 0.7, 1.15);
   composer.addPass(bloom);
-  composer.addPass(new GradePass());
+  const grade = new GradePass();
+  composer.addPass(grade);
 
   return {
-    gtao, shafts, bloom,
+    gtao, shafts, bloom, grade,
     setSize(w, h) {
       composer.setSize(w, h);
       const s = renderer.getDrawingBufferSize(new THREE.Vector2());

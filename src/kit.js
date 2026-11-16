@@ -242,7 +242,7 @@ function makeMaterials() {
   MAT.lattice = S({ map: TEX.lattice, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.5, metalness: 0.8 });
   MAT.turntable = S({ map: TEX.turntable, metalness: 0.9, roughness: 0.5, normalMap: TEX.micro, normalScale: v2(0.3) });
   MAT.slate = S({ color: 0x25282d, roughness: 0.8, metalness: 0.2 });
-  MAT.ground = S({ color: 0x2d2924, roughness: 1 });
+  MAT.ground = surface('stone', { color: 0x7d766c, macro: [0.16, 0.06, 0.05, 0.3] });      // the streets and the square: stone setts
   MAT.city = S({ map: TEX.facade, emissive: 0xffffff, emissiveMap: TEX.facadeLit, emissiveIntensity: 1.1, roughness: 0.95 });
   MAT.dial = S({ color: 0x6a5f4c, map: TEX.dial, emissive: 0xffffff, emissiveMap: TEX.dial, emissiveIntensity: 1.0, roughness: 0.45, side: THREE.DoubleSide });
   MAT.shadow = new THREE.MeshBasicMaterial({ color: 0x150f09, transparent: true, opacity: 0.72, side: THREE.DoubleSide });
@@ -325,11 +325,16 @@ const UNIT = {
   tread: treadGeo(),
 };
 const batches = new Map();
+// Nothing fitted by hand is exact. Every part is set a few millimetres and a fraction of
+// a degree off true (less for long parts, so their ends still meet what they are fixed to).
+const wob = () => (rnd() - 0.5) * 2, _q = new THREE.Quaternion(), _qj = new THREE.Quaternion(), _ej = new THREE.Euler();
 function push(kind, mat, sx, sy, sz, x, y, z, q) {
   const key = kind + ':' + mat;
   let b = batches.get(key);
   if (!b) batches.set(key, b = { geo: UNIT[kind], mat, list: [] });
-  b.list.push(new THREE.Matrix4().compose(_p.set(x, y, z), q || QID, _s.set(sx, sy, sz)));
+  const tilt = Math.min(0.012, 0.008 / Math.max(sx, sy, sz));
+  _q.copy(q || QID).multiply(_qj.setFromEuler(_ej.set(wob() * tilt, wob() * tilt, wob() * tilt)));
+  b.list.push(new THREE.Matrix4().compose(_p.set(x + wob() * 0.003, y + wob() * 0.002, z + wob() * 0.003), _q, _s.set(sx, sy, sz)));
 }
 export const ibox = (mat, sx, sy, sz, x, y, z, q) => push('box', mat, sx, sy, sz, x, y, z, q);
 export const icyl = (mat, r, h, x, y, z, q) => push('cyl', mat, r, h, r, x, y, z, q);
@@ -438,12 +443,13 @@ function newel(x, y, z) {
 export function rail(a, b, collide = true) {
   const f = frame(a, b);
   if (f.len < 0.05) return;
-  const lift = (h) => [[a[0], a[1] + h, a[2]], [b[0], b[1] + h, b[2]]];
-  tube('handrail', ...lift(1.1), 0.035);
-  tube('rail', ...lift(0.58), 0.02);
   ibox('rail', f.len, 0.12, 0.012, f.mx, f.my + 0.07, f.mz, f.q);     // kick plate
-  const n = Math.max(1, Math.round(f.len / 1.7));
-  for (let i = 0; i <= n; i++) { const t = i / n; baluster(a[0] + f.dx * t, a[1] + f.dy * t, a[2] + f.dz * t); }
+  const n = Math.max(1, Math.round(f.len / 1.7)), at = (i, h) => [a[0] + f.dx * i / n, a[1] + f.dy * i / n + h, a[2] + f.dz * i / n];
+  for (let i = 0; i <= n; i++) {
+    baluster(...at(i, 0));
+    // the rails come in lengths that run from one baluster to the next, so they kink a little at each
+    if (i < n) { tube('handrail', at(i, 1.1), at(i + 1, 1.1), 0.035); tube('rail', at(i, 0.58), at(i + 1, 0.58), 0.02); }
+  }
   if (collide) cbox(f.len, 1.2, 0.1, f.mx, f.my + 0.6, f.mz, f.q);
 }
 
@@ -471,14 +477,25 @@ export function stair(a, b, width, rails = [true, true]) {
     tube('steel', [nx - px * e, top - 0.004, nz - pz * e], [nx + px * e, top - 0.004, nz + pz * e], 0.022);   // nosing
     for (const sg of [-1, 1]) {
       ibox('iron', run * 0.8, 0.05, 0.05, cx + px * sg * (half - 0.065), top - 0.06, cz + pz * sg * (half - 0.065), f.qy);   // bracket
-      push('stud', 'rivet', 0.024, 0.024, 0.024, cx + px * sg * (half + 0.014), top - 0.06, cz + pz * sg * (half + 0.014));
+      for (const u of [-0.07, 0.07])                                   // the two bolts that hold this tread's bracket to the stringer
+        push('stud', 'rivet', 0.016, 0.016, 0.016, cx + ux * u + px * sg * (half + 0.014), top - 0.06 + f.dy / f.hl * u, cz + uz * u + pz * sg * (half + 0.014));
     }
   }
   for (const [k, sg] of [[0, -1], [1, 1]]) {
     const ox = px * half * sg, oz = pz * half * sg;
     const wx = f.mx + ox - n.x * 0.13, wy = f.my - n.y * 0.13, wz = f.mz + oz - n.z * 0.13;       // centre of the stringer's web
-    ibox('iron', f.len, 0.34, 0.025, wx, wy, wz, f.q);
-    for (const fl of [-1, 1]) ibox('iron', f.len, 0.03, 0.11, wx + px * sg * 0.045 + n.x * fl * 0.17, wy + n.y * fl * 0.17, wz + pz * sg * 0.045 + n.z * fl * 0.17, f.q);
+    // the stringer is rolled channel in lengths of about five metres, joined by riveted splice plates
+    const m = Math.max(1, Math.round(f.len / 5)), sl = f.len / m, dx = f.dx / f.len, dy = f.dy / f.len, dz = f.dz / f.len;
+    for (let k = 0; k < m; k++) {
+      const t = (k + 0.5) * sl - f.len / 2, cx = wx + dx * t, cy = wy + dy * t, cz = wz + dz * t;
+      ibox('iron', sl - 0.006, 0.34, 0.025, cx, cy, cz, f.q);
+      for (const fl of [-1, 1]) ibox('iron', sl - 0.006, 0.03, 0.11, cx + px * sg * 0.045 + n.x * fl * 0.17, cy + n.y * fl * 0.17, cz + pz * sg * 0.045 + n.z * fl * 0.17, f.q);
+      if (!k) continue;
+      const j = t - sl / 2, jx = wx + dx * j + px * sg * 0.022, jy = wy + dy * j, jz = wz + dz * j + pz * sg * 0.022;
+      ibox('iron', 0.46, 0.25, 0.018, jx, jy, jz, f.q);
+      for (const u of [-0.16, -0.06, 0.06, 0.16]) for (const v of [-0.08, 0.08])
+        push('stud', 'rivet', 0.02, 0.02, 0.02, jx + dx * u + n.x * v + px * sg * 0.012, jy + dy * u + n.y * v, jz + dz * u + n.z * v + pz * sg * 0.012);
+    }
     if (rails[k]) {
       rail([a[0] + ox, a[1], a[2] + oz], [b[0] + ox, b[1], b[2] + oz]);
       newel(a[0] + ox, a[1], a[2] + oz); newel(b[0] + ox, b[1], b[2] + oz);
