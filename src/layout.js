@@ -46,7 +46,7 @@ export const ARBOR = {
 // tower stands in it from the floor up.
 export const SHAFT = {
   esc: { r: 1.1, z: [-3.3, 9], bearings: [1.6, 8.3] },
-  pivot: { r: 1.0, z: [-14.6, -0.8], bearings: [-13.6, -4.25] },
+  pivot: { r: 1.0, z: [-14.8, -0.8], bearings: [-13.8, -4.1] },
   third: { r: 1.2, z: [2.5, 15.7], bearings: [3.2, 11.8] },
   center: { r: 1.45, z: [12.3, 49.6], bearings: [19.6, 26] },        // the thickest: its wheels and the hands all overhang its bearings
   great: { r: 1.4, z: [20.2, 31.2], bearings: [24.2, 30.5] },
@@ -57,7 +57,7 @@ export const SHAFT = {
 export const STAIRS = { xa: -56, xb: -8, zA: -33.75, zB: -31.25, width: 2.3, pad: 4 };
 export const LIFT = { xu: 30, xd: 36, z: -33, hx: 2.4, hz: 2, top: 186, x0: 27.5, x1: 38.5, z0: -35, z1: -31 };
 export const BRIDGES = {
-  escapement: { y: 90, z0: -7.75, z1: -4.95 },
+  escapement: { y: 90, z0: -7.75, z1: -5.05 },
   centre: { y: 150, z0: 8.7, z1: 11.3 },
   between: { y: 120, z0: 16.1, z1: 18.6 },
   balcony: { y: 120, z0: 36, z1: 40 },

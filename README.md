@@ -71,7 +71,8 @@ take-down over the whole scene: it solves each assembly as a 3-D frame by the st
 hands the reactions down to whatever carries that assembly, ending at the ground. It reports, per assembly, whether
 it holds, the member working hardest and by what factor, or the point at which it is attached to nothing. It then
 tests every structural solid for interference: nothing that carries load may occupy the same space as a wheel, an
-arbor, a walkway or the engine. `npm test` checks the solver against textbook cases.
+arbor, a walkway, the engine, or any other part that is drawn, whether or not it has a collider (stair posts,
+brackets and lamp standards do not). `npm test` checks the solver against textbook cases.
 
 The structure is designed by the same analysis that checks it (`src/world/structure.js`): declare, analyse, enlarge
 whatever is overworked, repeat until everything holds, and only then draw. So the sizes are the ones the loads asked for.
@@ -82,9 +83,9 @@ A-frame of alloy-steel box sections (450 MPa working stress), in the gap between
 frames of each arbor are strutted together wherever a strut can pass between the wheels: one braced tower per arbor.
 Where a member would foul a wheel, a walkway, the swing of the pendulum or the fall of the driving weight it is left
 out (found by casting rays through the physics world), and what remains is sized for the frame that is actually
-there. Clearance is tested three ways: rays for whatever stands in the line of a member, a box the size of the member
-for things too thin for a ray, and the disc each wheel sweeps as it turns, so that a gap between teeth is never
-mistaken for room. A leg is up to 3 m thick where there is room and thins to a blade between wheels; where the
+there. Clearance is tested four ways: rays for whatever stands in the line of a member, a box the size of the member
+for things too thin for a ray, the disc each wheel sweeps as it turns (so that a gap between teeth is never mistaken
+for room), and every drawn part as an oriented box, since most of what is drawn has no collider. A leg is up to 3 m thick where there is room and thins to a blade between wheels; where the
 floor wheels take the ground on one side, both legs stand on the other. Each stands on a small pedestal; the
 foundation proper is one raft under the whole building. The six towers weigh about 46,000 t; the heaviest is the
 one under the great wheel, because its bracing leaves a shaft open for the driving weight to fall through.
@@ -97,8 +98,10 @@ every bay takes it down to the ground; a steel ring carries the front wall over 
 crossings) have one fixed bearing and one free to slide, so they do not push the walls apart. The frame shows
 indoors. Outdoors it is dressed in stone, as a tall building's frame is (`src/world/facade.js`): every column line a
 pier running unbroken from plinth to cornice, every girder a string course, the bracing hidden in the brick. The
-dial fills a square stone panel between two giant piers; above the cornice come a lit attic, a steep copper roof,
-a lantern and a gilded spire, and each corner has a domed stair turret on a steel core of its own.
+dial fills a square stone panel between two giant piers; above the cornice come a lit attic, a steep mansard with
+dormers, and an iron-and-glass lamp room with a weathervane; each corner has a stair turret under a conical cap, on
+a steel core of its own. The roofs are the green of the movement's enamel and the ironwork is gilded, as on the
+movement inside.
 
 **The roof** carries only itself and the walkways, which hang from it on carbon-fibre rods.
 
@@ -129,7 +132,7 @@ src/
   world/
     tower.js          the building: shell, galleries, stairs, crossings
     structure.js      the engineer: plans the towers and the shell frame, sizes them by analysis, draws them
-    facade.js         the outside: piers, the clock panel, corner turrets, attic, roof, lantern and spire
+    facade.js         the outside: piers, the clock panel, corner turrets, attic, mansard and lamp room
     city.js           the town outside, generated from a seed
     props.js          loose crates, barrels and shot
     env.js            renderer, light, shadow, haze, sky

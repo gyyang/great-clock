@@ -233,11 +233,12 @@ function makeMaterials() {
   // cast iron in the works' green enamel with gold lining; railings and small fittings in black
   MAT.iron = surface('iron', { color: 0x1f5245, roughness: 0.8, lining: 0xc9a24a, age: [0.85, 0.85, 0.82, 0.12], macro: [0.06, 0.06, 0.5, 0.1] });
   MAT.rail = surface('iron', { color: 0x17191c, roughness: 0.75, seed: 1, macro: [0.05, 0.06, 0.8, 0.08] });
-  // the outside of the tower: dressed stone, weathered copper, gilding
-  MAT.facade = surface('stone', { color: 0xf0e2c6, macro: [0.12, 0.06, 0.08, 0.15], wall: [0.18, 1.0, 0, 0.1] });
-  MAT.verdigris = S({ color: 0x4d8f7c, roughness: 0.62, metalness: 0.35 });
-  MAT.gilt = S({ color: 0xe0b23c, roughness: 0.22, metalness: 1.0 });
-  for (const m of [MAT.facade, MAT.verdigris, MAT.gilt]) m.userData.outdoor = true;
+  // the outside of the tower: grey dressed stone, with the green and gold of the movement itself on the roofs and ironwork
+  MAT.facade = surface('stone', { color: 0xd6d0c4, macro: [0.12, 0.06, 0.08, 0.2], wall: [0.22, 1.0, 0, 0.12] });
+  MAT.verdigris = S({ color: 0x2f6f5c, roughness: 0.55, metalness: 0.35 });
+  MAT.gilt = S({ color: 0xd9ad3f, roughness: 0.25, metalness: 1.0 });
+  MAT.zinc = S({ color: 0x7b858b, roughness: 0.5, metalness: 0.65 });
+  for (const m of [MAT.facade, MAT.verdigris, MAT.gilt, MAT.zinc]) m.userData.outdoor = true;
   MAT.tendon = S({ color: 0x0c0d0f, roughness: 0.38, metalness: 0.15 });                                // carbon-fibre tendons: what the heavy loads hang on
   MAT.rivet = surface('brass', { color: 0x8a6f40, p: [0.5, 0, 0, 0], seed: 3 });
   MAT.handrail = surface('brass', { color: 0xc9983f, roughness: 0.8, seed: 4, macro: [0.05, 0.06, 0.8, 0.05] });       // polished by hands
@@ -331,6 +332,10 @@ const UNIT = {
   tread: treadGeo(),
 };
 const batches = new Map();
+// Every instanced part of any size, as an oriented box: { c: centre, q: rotation, half: half-sizes, tag }.
+// Most of what is drawn has no collider (posts, brackets, beams, lamp standards), so anything that
+// has to keep clear of the building looks here, not only in the physics world. G.tag marks who drew it.
+export const DRAWN = [];
 // Nothing fitted by hand is exact. Every part is set a few millimetres and a fraction of
 // a degree off true (less for long parts, so their ends still meet what they are fixed to).
 const wob = () => (rnd() - 0.5) * 2, _q = new THREE.Quaternion(), _qj = new THREE.Quaternion(), _ej = new THREE.Euler();
@@ -341,6 +346,8 @@ function push(kind, mat, sx, sy, sz, x, y, z, q) {
   const tilt = Math.min(0.012, 0.008 / Math.max(sx, sy, sz));
   _q.copy(q || QID).multiply(_qj.setFromEuler(_ej.set(wob() * tilt, wob() * tilt, wob() * tilt)));
   b.list.push(new THREE.Matrix4().compose(_p.set(x + wob() * 0.003, y + wob() * 0.002, z + wob() * 0.003), _q, _s.set(sx, sy, sz)));
+  const half = kind === 'box' || kind === 'tread' ? [sx / 2, sy / 2, sz / 2] : kind === 'cyl' || kind === 'rod' || kind === 'cone' ? [sx, sy / 2, sz] : kind === 'tube' ? [sx / 2, sy, sz] : [sx, sy, sz];
+  if (Math.max(half[0], half[1], half[2]) > 0.12) DRAWN.push({ c: [x, y, z], q: _q.clone(), half, tag: G.tag || '' });
 }
 export const ibox = (mat, sx, sy, sz, x, y, z, q) => push('box', mat, sx, sy, sz, x, y, z, q);
 export const icyl = (mat, r, h, x, y, z, q) => push('cyl', mat, r, h, r, x, y, z, q);

@@ -24,7 +24,7 @@
 // designLoop() declares all of that to the structural model, runs the analysis, enlarges
 // whatever is overworked and repeats until everything holds. Only then is it drawn.
 import * as THREE from 'three';
-import { G, ibox, icyl, iknob, sbox, beam, sbeam, tube } from '../kit.js';
+import { G, DRAWN, ibox, icyl, iknob, sbox, beam, sbeam, tube } from '../kit.js';
 import { TOWER, ARBOR, SHAFT, ROOF, PEND, DIAL } from '../layout.js';
 import { assembly, redeclare, analyse, report, SECTION, MATERIAL, GRAVITY } from '../structure/model.js';
 import { ENVELOPES } from '../clock/clockwork.js';
@@ -38,6 +38,28 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const boxOf = (h) => SECTION.box(h, Math.min(0.7 * h, DEPTH), h / 12);
 // a leg piece: h deep in the plane of its frame (set by the analysis), w thick across it (set by what it must pass between)
 const legOf = (h, w) => SECTION.box(h, w, Math.min(Math.max(h / 10, 0.06), 0.499 * Math.min(h, w)));
+
+// ---- oriented boxes: do two overlap? (separating-axis test)
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const axesOf = (q) => { const e = new THREE.Matrix4().makeRotationFromQuaternion(q).elements; return [[e[0], e[1], e[2]], [e[4], e[5], e[6]], [e[8], e[9], e[10]]]; };
+function obb(c, ax, half) {
+  const ext = [0, 1, 2].map(i => Math.abs(ax[0][i]) * half[0] + Math.abs(ax[1][i]) * half[1] + Math.abs(ax[2][i]) * half[2]);
+  return { c, ax, half, lo: c.map((v, i) => v - ext[i]), hi: c.map((v, i) => v + ext[i]) };
+}
+function overlaps(A, B) {
+  for (let i = 0; i < 3; i++) if (A.lo[i] > B.hi[i] || B.lo[i] > A.hi[i]) return false;
+  const dot = (u, v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2], d = [B.c[0] - A.c[0], B.c[1] - A.c[1], B.c[2] - A.c[2]];
+  const R = A.ax.map(a => B.ax.map(b => dot(a, b))), Q = R.map(r => r.map(v => Math.abs(v) + 1e-9)), t = A.ax.map(a => dot(d, a));
+  for (let i = 0; i < 3; i++) if (Math.abs(t[i]) > A.half[i] + B.half[0] * Q[i][0] + B.half[1] * Q[i][1] + B.half[2] * Q[i][2]) return false;
+  for (let j = 0; j < 3; j++) if (Math.abs(t[0] * R[0][j] + t[1] * R[1][j] + t[2] * R[2][j]) > B.half[j] + A.half[0] * Q[0][j] + A.half[1] * Q[1][j] + A.half[2] * Q[2][j]) return false;
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+    const i1 = (i + 1) % 3, i2 = (i + 2) % 3, j1 = (j + 1) % 3, j2 = (j + 2) % 3;
+    if (Math.abs(t[i2] * R[i1][j] - t[i1] * R[i2][j]) > A.half[i1] * Q[i2][j] + A.half[i2] * Q[i1][j] + B.half[j1] * Q[i][j2] + B.half[j2] * Q[i][j1]) return false;
+  }
+  return true;
+}
+// Everything drawn that is not this structure and not outdoors, as boxes.
+const drawnBoxes = () => DRAWN.filter(o => o.tag === '').map(o => obb(o.c, axesOf(o.q), o.half));
 
 let towers = [], hung = [], sizes = new Map(), passes = 0, feet = [], solids = [], bearings = [];
 
@@ -77,6 +99,11 @@ export function buildStructure() {
       const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), new THREE.Vector3(d[0] / L, d[1] / L, d[2] / L));
       if (G.world.intersectionWithShape({ x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, z: (a[2] + b[2]) / 2 }, q, new R.Cuboid(L / 2 - 0.5, (along ? Math.max(h, w) : h) / 2 + 0.1, (along ? Math.max(h, w) : w) / 2 + 0.1), undefined, undefined, G.ground)) return true;
     }
+    if (L > 1.2) {                     // and against everything drawn, collider or not
+      const u = d.map(v => v / L), qq = cross3(u, p), ql = Math.hypot(...qq), q2 = qq.map(v => v / ql), p2 = cross3(q2, u);
+      const me = obb(a.map((v, i) => (v + b[i]) / 2), [u, p2, q2], [L / 2 - 0.4, (along ? Math.max(h, w) : h) / 2 + 0.15, (along ? Math.max(h, w) : w) / 2 + 0.15]);
+      if (drawn.some(o => overlaps(me, o))) return true;
+    }
     for (let k = 0; k <= 12; k++) if (forbidden(a.map((v, i) => v + d[i] * k / 12))) return true;
     // what the turning parts sweep, wherever their teeth are now
     const n = Math.max(2, Math.ceil(L / 0.7)), thick = (along ? Math.max(h, w) : w) / 2, deep = (along ? Math.max(h, w) : h) / 2;
@@ -91,7 +118,7 @@ export function buildStructure() {
     return false;
   };
   // Is there room on the floor for a leg to stand here, on a pedestal, with space to get round it?
-  const standing = (p) => !G.world.intersectionWithShape({ x: p[0], y: 2.0, z: p[2] }, { x: 0, y: 0, z: 0, w: 1 }, new R.Cuboid(3.2, 1.6, 2.0), undefined, undefined, G.ground)
+  const standing = (p) => !drawn.some(o => overlaps(obb([p[0], 2.0, p[2]], [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [3.2, 1.6, 2.0]), o)) && !G.world.intersectionWithShape({ x: p[0], y: 2.0, z: p[2] }, { x: 0, y: 0, z: 0, w: 1 }, new R.Cuboid(3.2, 1.6, 2.0), undefined, undefined, G.ground)
     && !ENVELOPES.some(e => e.floor && Math.hypot(p[0] - e.x, p[2] - e.z) < e.r + 3.5);
   // A strut from one frame to the other must also miss the frames of every other tower,
   // which are planned but not yet built (their legs taken as 3 m deep).
@@ -99,6 +126,7 @@ export function buildStructure() {
   // No frame may be thicker than leaves room for the frame in the next gap along.
   const all = Object.values(SHAFT).flatMap(sh => sh.bearings), room = (z) => Math.min(THICK[0], Math.min(...all.filter(o => o !== z).map(o => Math.abs(o - z))) - 0.2);
 
+  const drawn = drawnBoxes();        // posts, brackets, beams, lamp standards: most of what is drawn has no collider
   // ---- 1. a tower under each arbor
   towers = [];
   for (const [name, sh] of Object.entries(SHAFT)) {
@@ -318,6 +346,7 @@ function designLoop() {
 
 function draw() {
   const out = [];
+  G.tag = 'structure';
   declare(out);
   solids = []; bearings = [];
   for (const m of out) {
@@ -348,6 +377,7 @@ function draw() {
     tube('tendon', [h.x, h.e.y, h.e.z], [h.x, ROOF.at(h.x) + 0.4, h.e.z], 0.03);
     iknob('steel', 0.07, h.x, h.e.y, h.e.z); ibox('iron', 0.1, 0.5, 0.1, h.x, h.e.y + 1.9, h.e.z);
   }
+  G.tag = '';
 }
 
 // Runs the structural model over everything declared so far and adds the checks that are
@@ -367,8 +397,16 @@ export function structuralCheck() {
       return false;
     }, undefined, undefined, c);
   }
+  // ... and against everything drawn that has no collider at all
+  const drawn = drawnBoxes();
+  for (const q of solids) {
+    const c = q.collider, t = c.translation(), he = c.shape.halfExtents;
+    if (!he) continue;
+    const r = c.rotation(), me = obb([t.x, t.y, t.z], axesOf(new THREE.Quaternion(r.x, r.y, r.z, r.w)), [he.x - 0.03, he.y - 0.03, he.z - 0.03]), hit = drawn.find(o => overlaps(me, o));
+    if (hit) clashes.push(`${q.what} at (${q.at.map(v => v.toFixed(0)).join(', ')}) against a drawn part at (${hit.c.map(v => v.toFixed(0)).join(', ')})`);
+  }
   extra.push({ name: 'clearance: structure against everything else', ok: clashes.length === 0,
-    verdict: clashes.length ? `${clashes.length} of ${solids.length} solids overlap something: ${clashes.slice(0, 6).join('; ')}${clashes.length > 6 ? '; ...' : ''}` : `${solids.length} solids, none overlapping a wheel, an arbor, a walkway or the engine (as they stand now)` });
+    verdict: clashes.length ? `${clashes.length} of ${solids.length} solids overlap something: ${clashes.slice(0, 6).join('; ')}${clashes.length > 6 ? '; ...' : ''}` : `${solids.length} solids, none overlapping a wheel, an arbor, a walkway, the engine or any other drawn part (as they stand now)` });
   // The ground: one raft under the whole building, on rock.
   const total = res.terminal.ground.reduce((sum, t) => sum - t.f[1], 0), area = (2 * (TOWER.hx + TOWER.wall)) * (2 * (TOWER.hz + TOWER.wall)), rock = 1.0e6;
   extra.push({ name: 'ground: under the raft', ok: total / area <= rock,
