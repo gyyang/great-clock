@@ -44,6 +44,24 @@
           padding: 7px 16px; border: 1px solid rgba(216,180,106,.45); border-radius: 3px; background: rgba(13,10,7,.55);
           opacity: 0; transition: opacity .25s ease; pointer-events: none; z-index: 5; white-space: nowrap; }
   #hint.show { opacity: .95; }
+
+  /* a museum label: the plate you are reading, engraved brass on dark */
+  #plaque { position: fixed; right: 3vw; top: 50%; transform: translateY(-50%); width: min(430px, 90vw); max-height: 82vh;
+            overflow: hidden; box-sizing: border-box; padding: 22px 26px 16px; z-index: 6; pointer-events: none;
+            background: linear-gradient(170deg, rgba(30,23,14,.93), rgba(13,10,7,.95)); color: #e6d6b4;
+            border: 1px solid rgba(216,180,106,.6); outline: 1px solid rgba(216,180,106,.25); outline-offset: 4px;
+            box-shadow: 0 10px 40px rgba(0,0,0,.6); font-size: 14.5px; line-height: 1.5;
+            opacity: 0; visibility: hidden; transition: opacity .3s ease, visibility .3s; }
+  #plaque.show { opacity: 1; visibility: visible; }
+  #plaque .no { font-size: 11px; letter-spacing: .3em; text-transform: uppercase; color: #a88e5c; }
+  #plaque h2 { font-weight: 400; font-size: 23px; letter-spacing: .08em; color: var(--brass); margin: 4px 0 6px; }
+  #plaque .what { font-style: italic; color: #cbb68a; margin: 0 0 10px; padding-bottom: 10px; border-bottom: 1px solid rgba(216,180,106,.3); }
+  #plaque .how p { margin: 0 0 9px; }
+  #plaque .row { margin: 8px 0 0; color: #d8c69e; }
+  #plaque .row b { font-weight: 400; font-size: 11px; letter-spacing: .24em; text-transform: uppercase; color: var(--brass); margin-right: 8px; }
+  #plaque .now { font-variant-numeric: tabular-nums; }
+  #plaque .foot { display: flex; justify-content: space-between; margin-top: 12px; padding-top: 8px; border-top: 1px solid rgba(216,180,106,.3);
+                  font-size: 11px; letter-spacing: .14em; color: #8f7a52; }
 </style>
 </head>
 <body>
@@ -52,6 +70,15 @@
 <div id="hud"><span id="hud-time"></span><span id="hud-alt"></span><span id="hud-where"></span><span id="hud-engine"></span></div>
 <div id="toast"></div>
 <div id="hint"></div>
+<div id="plaque" role="dialog" aria-live="polite">
+  <div class="no" id="plaque-no"></div>
+  <h2 id="plaque-title"></h2>
+  <p class="what" id="plaque-what"></p>
+  <div class="how" id="plaque-how"></div>
+  <p class="row"><b>Look for</b><span id="plaque-look"></span></p>
+  <p class="row now" id="plaque-now-row"><b>Now</b><span id="plaque-now"></span></p>
+  <div class="foot"><span id="plaque-count"></span><span>E or Esc to put it down</span></div>
+</div>
 
 <div id="overlay">
   <div class="card">
@@ -62,7 +89,7 @@
       <b>Mouse</b><span>look</span>
       <b>Shift</b><span>run</span>
       <b>Space</b><span>jump</span>
-      <b>E</b><span>use the regulator, the whistle chain or the hoist's hand rope</span>
+      <b>E</b><span>use the regulator, the whistle chain or the hoist's hand rope; read a plate</span>
       <b>1 – 9, 0, −</b><span>fast travel to the sights, inside and out (0 the attic, − the lamp room)</span>
       <b>R</b><span>back to the floor</span>
       <b>L</b><span>light or put out your lantern</span>

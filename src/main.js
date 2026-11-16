@@ -9,6 +9,7 @@ import { buildFacade } from './world/facade.js';
 import { buildDoors } from './world/doors.js';
 import { buildHoist } from './world/hoist.js';
 import { buildProps } from './world/props.js';
+import { buildPlaques } from './world/plaques.js';
 import { buildClockwork } from './clock/clockwork.js';
 import { buildEngine } from './engine/engine.js';
 import { Player } from './player.js';
@@ -37,6 +38,7 @@ async function main() {
   world.colliders.forEach(c => { if (!before.has(c.handle)) G.machineFixed.add(c.handle); });       // the engine is machinery: its parts bear on one another by design
   const hoist = buildHoist(engine);
   const structure = buildStructure();
+  const plaques = buildPlaques({ clock, engine, hoist });      // after the structure is planned, so they do not change it; checked with everything else
   const props = buildProps(clock.floor);
   flushBatches();
   // everything solid both casts and receives the dial light's shadows
@@ -100,7 +102,7 @@ async function main() {
   enter.addEventListener('click', begin);
   canvas.addEventListener('mousedown', () => { dragging = true; if (!locked()) begin(); });
   window.addEventListener('mouseup', () => { dragging = false; });
-  document.addEventListener('pointerlockchange', () => { if (!locked() && !shots) { overlay.classList.remove('hidden'); enter.textContent = 'Return to the tower'; player.keys.clear(); } });
+  document.addEventListener('pointerlockchange', () => { if (!locked() && !shots) { overlay.classList.remove('hidden'); enter.textContent = 'Return to the tower'; player.keys.clear(); plaques.close(); } });
   window.addEventListener('mousemove', (e) => {
     if (!locked() && !dragging) return;
     player.yaw -= e.movementX * 0.0022;
@@ -114,7 +116,8 @@ async function main() {
     if (e.code === 'KeyM') say(sound.toggleMute() ? 'Muted' : 'Sound on');
     if (e.code === 'KeyQ') { autoQuality = false; say(['Detail: low', 'Detail: medium', 'Detail: high'][env.setQuality((env.quality + 2) % 3)]); }
     if (e.code === 'KeyL') say(env.toggleLantern() ? 'Lantern lit' : 'Lantern out');
-    if (e.code === 'KeyE') { const done = engine.use(player.position) || hoist.use(player.position); if (done) say(done); }
+    if (e.code === 'KeyE') { const done = engine.use(player.position) || hoist.use(player.position); if (done) { say(done); plaques.close(); } else plaques.use(player.position, player.yaw); }
+    if (e.code === 'Escape') plaques.close();
     if (/^Digit[1-9]$/.test(e.code)) go(+e.code.slice(5) - 1);
     if (e.code === 'Digit0') go(9);
     if (e.code === 'Minus') go(10);
@@ -137,7 +140,8 @@ async function main() {
     hudEngine.textContent = run && `${run} · ${clock.status()}`;
     hudEngine.style.display = hudEngine.textContent ? '' : 'none';
     const pp = player.position, atLift = pp.x > LIFT.x0 - 1.5 && pp.x < LIFT.x1 + 1.5 && pp.z > LIFT.z0 - 2.6 && pp.z < LIFT.z1 + 2.6;
-    const h2 = engine.hint(player.position) || hoist.hint(player.position) || (atLift ? 'The lift never stops. Step on as a deck comes up to the floor (left side up, right side down); going down, step off just before your landing' : '');
+    const h2 = engine.hint(player.position) || hoist.hint(player.position) || (atLift ? 'The lift never stops. Step on as a deck comes up to the floor (left side up, right side down); going down, step off just before your landing' : '') || plaques.hint(player.position, player.yaw);
+    plaques.update(player.position);
     if (hint.textContent !== h2) hint.textContent = h2;
     hint.classList.toggle('show', !!h2);
   }
@@ -196,7 +200,7 @@ async function main() {
   requestAnimationFrame(frame);
 
   // handy from the console
-  window.__game = { G, DRAWN, RAPIER, player, clock, engine, props, env, world, sound, go, SPOTS, city, structure, doors, hoist, check: structuralCheck,
+  window.__game = { G, DRAWN, RAPIER, player, clock, engine, props, env, world, sound, go, SPOTS, city, structure, doors, hoist, plaques, check: structuralCheck,
     advance: (sec) => { for (let i = 0; i < sec / DT; i++) { clock.update(DT); engine.update(DT); hoist.update(DT); props.step(); player.step(DT); doors.update(DT, player.position); world.step(); } hoist.frame(sec); }, look: (yaw, pitch) => { player.yaw = yaw; player.pitch = pitch; },
     // stand at p, look along (yaw, pitch) and draw one frame: for screenshots while the page is in the background
     shot: (p, yaw, pitch = 0) => {

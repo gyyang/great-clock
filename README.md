@@ -27,7 +27,7 @@ the page in `dist/`. Every push to `main` is tested, built and published to the 
 | W A S D / mouse | walk / look |
 | Shift | run |
 | Space | jump |
-| E | use what is in reach: the engine's regulator lever, the whistle chain, the hoist's hand rope |
+| E | use what is in reach: the engine's regulator lever, the whistle chain, the hoist's hand rope; or read the brass plate in front of you (E again or Esc puts it down) |
 | 1 – 9, 0, − | fast travel: floor, pendulum landing, escapement, between the wheels, behind the dial, the engine, the winding gear, the square, across the river, the attic, the lamp room |
 | R | back to the floor |
 | M | mute |
@@ -62,6 +62,16 @@ There are no image, model or sound files: everything is generated when the page 
 - **Exposure adapts** – the picture stops down when the view is full of light (behind the dial) and opens up in the dark, over about a second.
 - **Edges** – every box has a chamfer a centimetre wide that catches the light, whatever its size.
 - **Grade** – filmic tone curve, cool shadows and warm highlights, vignette and grain.
+- **The plates** – as in a museum, each exhibit has a brass plate engraved with its name, on a cast-iron lectern or
+  bracketed to a catwalk's handrail (`src/world/plaques.js`, where all their texts are kept together). Stand at one,
+  face it and press E to read what the thing is, how it works, what to watch from there, and a line read live from
+  the simulation; the label keeps count of how many you have read. They are solid and in the structural check like
+  any other part. Nineteen: the Great Clock (in the square, by the portal), the floor wheels, the steam engine, the
+  regulator and governor, the boiler, the winding gear, the driving weight (by its crib), the towers (at the great
+  wheel's tower's foot), the paternoster lift, the hoist (in the right-hand stair tower), the pendulum (on its
+  landing), the escapement and the remontoire (on the escapement's catwalk), the going train (on the crossing
+  between the wheels), the motion work and hands (behind the dial), the attic, the lookout (in the right-hand stair
+  tower), the lamp room, and the coal yard and the stack (in the yard).
 
 ### The building
 
