@@ -16,6 +16,23 @@ export const PEND = {
   theta0: 3 * DEG,        // the swing it is designed for (more than this and the suspension spring would not last)
   bobR: 8, deckDrop: 8.3, deckHalfX: 6, deckHalfZ: 3,
 };
+PEND.kg = Math.PI * PEND.bobR ** 2 * 2.2 * 8500 + 5 * Math.PI * 0.17 ** 2 * (PEND.L - 9) * 7850;      // the bob and the rod (clockwork.js weighs them the same way)
+// The suspension: four leaves of maraging steel side by side along the pivot's axis, all in one plane, each 1.2 m wide
+// and 200 mm thick. A strip clamped under a tension T bends over a length lambda = sqrt(E I / T) below its clamp and,
+// if it is much longer than that, turns about a point lambda below the clamp: there is the pendulum's pivot (pivotY),
+// and the strip's stiffness is in that, since what it stores bending exactly makes up what the pendulum loses by
+// turning about a point lambda lower. These are 2 lambda long; the lower end then bends too, a little, and the pivot
+// is `top` lambda below the clamp, the moment there `top` times a long strip's and at the lower clamp `bottom` times it.
+PEND.leaf = { n: 4, w: 1.2, gap: 0.13, t: 0.2, E: 190e9, uts: 1.8e9, alpha: 10.1e-6, cheek: 40 };     // cheek: radius of the chops' faces where the leaves leave them
+{
+  const f = PEND.leaf;
+  f.tension = PEND.kg * GRAV / (f.n * f.w * f.t);
+  f.lambda = f.t * Math.sqrt(f.E / (12 * f.tension)); f.free = 2 * f.lambda;
+  const E1 = Math.exp(-f.free / f.lambda), lb = PEND.L - f.lambda, k = (lb - f.lambda) / (lb + f.lambda);
+  f.top = (1 + E1 * E1 * k) / (1 - E1 * E1 * k); f.bottom = E1 * (1 + k) / (1 - E1 * E1 * k);
+  f.clampY = PEND.pivotY + f.top * f.lambda;           // where the leaves leave the upper chops
+  f.chopsY = f.clampY - f.free;                        // ... and go into the lower ones, at the head of the rod
+}
 
 // Anchor escapement: 30-tooth escape wheel, pallets span 6.5 teeth.
 export const ESC = { R: 13, N: 30, depth: 2.3, pallet: 39 * DEG, z: -2 };
@@ -46,7 +63,7 @@ const d = DIAL.y - ESC.y;
 const h = (aA * aA - aB * aB + d * d) / (2 * d);
 export const ARBOR = {
   esc: { x: 0, y: ESC.y },
-  pivot: { x: 0, y: PEND.pivotY + 1.9 },      // not an arbor: the head beam the pendulum's suspension spring is clamped in
+  pivot: { x: 0, y: PEND.leaf.clampY + 1.5 },      // not an arbor: the head beam the pendulum's suspension spring is clamped in
   third: { x: Math.sqrt(aA * aA - h * h), y: ESC.y + h },
   center: { x: 0, y: DIAL.y },
   great: { x: -25.5, y: DIAL.y - Math.sqrt(aC * aC - 25.5 * 25.5) },
@@ -60,8 +77,8 @@ export const SHAFT = {
   esc: { r: 1.1, z: [-0.6, 10.3], bearings: [1.6, 8.9] },            // the last arbor of the train; the remontoire and the escape wheel ride on a spigot on its back end
   pivot: { r: 1.0, z: [-14.6, -2.2], bearings: [-13.8, -6.3], beam: true },       // the suspension's head beam: it runs on forward to carry the gravity arms' pivots
   third: { r: 1.2, z: [1.9, 15.95], bearings: [3.2, 10.9] },
-  center: { r: 1.45, z: [12.3, 49.6], bearings: [19.6, 26] },        // the thickest: its wheels and the hands all overhang its bearings
-  great: { r: 1.4, z: [19.7, 35.2], bearings: [24.2, 30.5] },        // runs on past both bearings: the going ratchet behind, the winding wheel and its clutch in front
+  center: { r: 1.45, z: [11.55, 52.4], bearings: [12.0, 26], dial: 41.5 },        // a bearing either side of its wheels, and a third in the boss of the dial's frame (dial), which the hands are just outside
+  great: { r: 1.4, z: [19.15, 35.2], bearings: [19.6, 30.5] },        // a bearing either side of the great wheel and the barrel; the winding wheel and its clutch overhang the front one
   minute: { r: 1.0, z: [26.5, 36.5], bearings: [27.8, 35.2] },
 };
 
@@ -199,12 +216,15 @@ export const ENGINE = {
 export const WIND = {
   z: 32.6,                 // plane of the winding wheel on the great arbor, and of the worms and upright shafts that drive it
   wheelR: 8.0, teeth: 80,  // the winding wheel: a worm wheel, loose on the arbor until its clutch goes in. Its teeth carry the whole weight: 200 mm module
-  wormR: 1.1,              // pitch radius of the worms, which stand at three o'clock and nine (a 5 degree lead: they cannot be driven backward)
-  weightR: 4.5, weightH: 5.6,          // the driving weight: 2,560 t of cast iron, half as much again as the going train needs
+  wormR: 1.1,              // pitch radius of the worms, which stand at three o'clock and nine (a 5 degree lead, which the weight could drive backward: the clicks hold it)
+  weightR: 4.5, weightH: 5.6,          // the driving weight: 2,560 t of cast iron; what sets it is the wind on the hands (clockwork.js)
   shaftY: 5.2,             // height of the line shaft over the floor
-  barrelR: 5, top: 72, band: 2, bottom: 37,      // the weight's top: where winding stops, how far it falls before winding starts, as low as it can go
+  barrelR: 5, top: 72, band: 2,        // the weight's top: where winding stops, and how far it falls before winding starts
   efficiency: 0.6,         // of the whole winding train; nearly all the loss is in the worms
+  ropes: 4, ropeD: 0.24,   // it hangs on four steel ropes, 240 mm (6 x 36, 1,960 MPa wire), from an equalising beam
+  crib: { r: 3.9, h: 13, crush: 5e6, strain: 0.5 },     // under its fall, an octagonal crib of oak baulks laid crosswise, to be crushed if it ever falls: across its flats / 2, height, crushing stress across the grain, how far it can be crushed
 };
+WIND.bottom = WIND.crib.h + 0.05 + WIND.weightH;     // the weight's top when it has run down and sits on the crib
 
 // Heights of the two webs of the flywheel shaft's crank; the connecting rod works between them.
 export const CRANK = { lower: 3.66, upper: 4.44 };

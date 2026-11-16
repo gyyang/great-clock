@@ -134,7 +134,7 @@ async function main() {
     hudWhere.textContent = player.speed > 12 && !player.grounded ? `${(player.speed * 3.6).toFixed(0)} km/h` : (player.slip > 0.6 ? 'losing grip' : '');
     hudWhere.style.display = hudWhere.textContent ? '' : 'none';
     const run = engine.readout(player.position);
-    hudEngine.textContent = run && `${run} · weight ${clock.state.weightTop.toFixed(2)} m${clock.state.winding ? ', winding' : ''}`;
+    hudEngine.textContent = run && `${run} · ${clock.status()}`;
     hudEngine.style.display = hudEngine.textContent ? '' : 'none';
     const pp = player.position, atLift = pp.x > LIFT.x0 - 1.5 && pp.x < LIFT.x1 + 1.5 && pp.z > LIFT.z0 - 2.6 && pp.z < LIFT.z1 + 2.6;
     const h2 = engine.hint(player.position) || hoist.hint(player.position) || (atLift ? 'The lift never stops. Step on as a deck comes up to the floor (left side up, right side down); going down, step off just before your landing' : '');

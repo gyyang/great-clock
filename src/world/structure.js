@@ -29,7 +29,7 @@ const _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vect
 import { TOWER, ARBOR, SHAFT, ROOF, PEND, DIAL, LIFT, BRIDGES, LAYER, WIND, ARCH, STAIR_TOWER, ESCAPE, STACK, LAMP } from '../layout.js';
 import { assembly, redeclare, getAssembly, analyse, report, displacement, SECTION, MATERIAL, GRAVITY, WIND_Q, BUCKLING_FACTOR } from '../structure/model.js';
 import { MESH_STONE, stackR, stackWall, STACK_RINGS } from './facade.js';
-import { ENVELOPES, WINDGEAR, LIFTGEAR, POWER } from '../clock/clockwork.js';
+import { ENVELOPES, WINDGEAR, LIFTGEAR, POWER, ROPE, MAINT } from '../clock/clockwork.js';
 import { DOOR_LEAVES, leafBox } from './doors.js';
 import { HOISTGEAR } from './hoist.js';
 import SEED from '../structure/design.json';
@@ -77,7 +77,7 @@ function boxIndex(list, CELL = 6) {
 
 const SOLID = new Set(['leg', 'tie beam', 'brace', 'strut', 'trestle', 'post', 'jib', 'yoke', 'yoke arm', 'lever bracket', 'steady', 'lift head', 'link', 'detent', 'wind truss', 'ring truss']);       // what is drawn solid, and tested for clearance
 let plan = '';
-let towers = [], hung = [], sizes = new Map(), passes = 0, feet = [], solids = [], bearings = [], wind = null, links = [], detent = null;
+let towers = [], hung = [], sizes = new Map(), passes = 0, feet = [], solids = [], bearings = [], wind = null, links = [], detent = null, dialDrawn = [];
 
 // ---- geometry of two segments: how near they come
 function gap(p1, q1, p2, q2) {
@@ -98,10 +98,12 @@ export function buildStructure() {
     const d = b.map((v, i) => v - a[i]), L = Math.hypot(...d);
     return L < 0.7 ? false : !!G.world.castRay(new R.Ray({ x: a[0] + d[0] / L * 0.3, y: a[1] + d[1] / L * 0.3, z: a[2] + d[2] / L * 0.3 }, { x: d[0] / L, y: d[1] / L, z: d[2] / L }), L - 0.6, true);
   };
-  // Where nothing fixed may stand: the pendulum's swing and the driving weight's fall.
+  // Where nothing fixed may stand: the pendulum's swing and its suspension, the escapement's fly, and the driving
+  // weight's fall, down to the floor (the crib under it, clockwork.js).
   const forbidden = (p) => {
-    if (p[2] > PEND.z - 3.2 && p[2] < PEND.z + 3.2 && p[1] < PEND.pivotY + 3 && Math.abs(p[0]) < (p[1] < 23 ? 18.5 : 4 + (PEND.pivotY - p[1]) * 0.115)) return true;
-    return p[2] > 22 && p[2] < 32 && p[1] > 18 && p[1] < 75 && p[0] > ARBOR.great.x - 10.6 && p[0] < ARBOR.great.x + 0.4;
+    if (p[2] > PEND.z - 3.2 && p[2] < PEND.z + 3.2 && p[1] < Math.max(PEND.pivotY + 3, PEND.leaf.clampY + 0.4) && Math.abs(p[0]) < (p[1] < 23 ? 18.5 : 4 + (PEND.pivotY - p[1]) * 0.115)) return true;
+    if (Math.abs(p[0]) < 2.4 && p[1] > ARBOR.esc.y + 2 && p[1] < ARBOR.pivot.y && p[2] > -3.6 && p[2] < -0.3) return true;
+    return p[2] > 22 && p[2] < 32 && p[1] > 0 && p[1] < 75 && p[0] > ARBOR.great.x - 10.6 && p[0] < ARBOR.great.x + 0.4;
   };
   // Would a member from a to b, h deep in its own plane and w thick, foul anything that is
   // already there? Rays down its middle and well outside its edges (a tooth that is clear now
@@ -140,8 +142,9 @@ export function buildStructure() {
     && !ENVELOPES.some(e => e.floor && Math.hypot(p[0] - e.x, p[2] - e.z) < e.r + 3.5);
   // Not on another tower's pedestal, nor under a floor wheel's teeth; unless it is so near another tower's foot that
   // the two can stand side by side on one block of concrete, a combined footing (see pedestals())
+  const offTeeth = (p) => !ENVELOPES.some(e => e.floor && Math.hypot(p[0] - e.x, p[2] - e.z) < e.r + 2.8);
   const apart = (p) => stood.every(f => Math.abs(f[0] - p[0]) >= 5.4 || Math.abs(f[2] - p[2]) >= 3.7 || (Math.abs(f[0] - p[0]) <= SHARE[0] && Math.abs(f[2] - p[2]) <= SHARE[1] && Math.abs(f[2] - p[2]) >= SHARE[2]))
-    && !ENVELOPES.some(e => e.floor && Math.hypot(p[0] - e.x, p[2] - e.z) < e.r + 2.8);
+    && offTeeth(p);
   // A strut from one frame to the other must also miss the frames of every other tower,
   // which are planned but not yet built (their legs taken as 3 m deep).
   // The towers stand among one another, so a member must also miss every member of every other tower planned
@@ -181,7 +184,7 @@ export function buildStructure() {
     // The two sides are chosen together: a frame's feet must stand at least MIN_BASE of its height apart, or it is a
     // leaning post, not a frame (both feet on one side of the arbor, when the other side is taken, need this most).
     const stays = (side, sp) => half.filter(y => { const p = (z) => [a.x + side * sp * yh * (yh - y) / (yh - FOOT), y, z]; return !strutFouls(p(z1), p(z2), name); }).length;
-    const options = (side) => { for (const ok of [(sd, sp, z) => standing(foot(sd, sp, z)) && clear(sd, sp, z), clear]) { const c = frac.filter(sp => sh.bearings.every(z => ok(side, sp, z))); if (c.length) return c; } const f = frac.find(sp => sh.bearings.every(z => !fouls(H(z), foot(side, sp, z), 1.6, DEPTH))); return [f ?? 0.02]; };
+    const options = (side) => { for (const ok of [(sd, sp, z) => standing(foot(sd, sp, z)) && clear(sd, sp, z), clear]) { const c = frac.filter(sp => sh.bearings.every(z => ok(side, sp, z))); if (c.length) return c; } const bare = (sp) => sh.bearings.every(z => !fouls(H(z), foot(side, sp, z), 1.6, DEPTH)), f = frac.find(sp => bare(sp) && sh.bearings.every(z => offTeeth(foot(side, sp, z)))) ?? frac.find(bare); return [f ?? 0.02]; };       // (a foot's pedestal kept off a floor wheel's teeth, if any splay will)
     const oL = options(-1).map(sp => ({ sp, n: stays(-1, sp) })), oR = options(1).map(sp => ({ sp, n: stays(1, sp) })), pairs = [];
     for (const l of oL) for (const r of oR) pairs.push({ l: l.sp, r: r.sp, n: l.n + r.n, rank: frac.indexOf(l.sp) + frac.indexOf(r.sp), base: l.sp + r.sp });
     const wide = pairs.filter(q => q.base >= MIN_BASE - 1e-9), top = Math.max(...(wide.length ? wide : pairs).map(q => q.n));
@@ -220,8 +223,8 @@ export function buildStructure() {
         if (Math.abs(qA - qB) < 1e-6) continue;
         const y = (pB - pA) / (qA - qB);
         if (y < 6 || y > Math.min(A.yh, B.yh) - 6) continue;
-        const a = A.at(sa, y, za), b = B.at(sb, y, zb);
-        if (!fouls(a, b, 0.8, 0.8)) links.push({ a, b, A, B, sa, sb, y });
+        const a = A.at(sa, y, za), b = B.at(sb, y, zb), me = memberBox(a, b, 0.8, 0.8);
+        if (!fouls(a, b, 0.8, 0.8) && !placed.some(m => m.owner !== A.arbor && m.owner !== B.arbor && overlaps(me, m.box))) links.push({ a, b, A, B, sa, sb, y });      // (nor through a third tower's leg)
       }
     }
   }
@@ -336,34 +339,23 @@ export function buildStructure() {
     }
   }
   lap('winding');
-  // ---- 1c. the detent of the great wheel's maintaining power: a pawl on the end of a bracket off the centre arbor's tower
+  // ---- 1c. the detent of the great wheel's maintaining power: a pawl at six o'clock under the maintaining ring, on a beam
+  // across the great arbor's back frame. The springs push the ring back against it with what they are set up to against
+  // their stops (clockwork.js MAINT) every time the weight is wound; at six o'clock that push is level, along the
+  // beam, which hands it to the frame's two legs by axial force. The pawl is a solid steel block bolted over the beam's
+  // whole front face, forward into the ring's plane and up to the teeth. The force does not pass through the beam's
+  // axis (the ring is 1.1 m in front of the frame's plane, and above the beam), so the beam is bent both ways as well:
+  // it is a solid forged slab, the stoutest that will pass, as near the ring as the pawl lets it.
   {
-    // The pawl must stand in the ring's own plane (PAWL_Z), reaching in to its teeth. The bracket that carries it
-    // comes across from the centre tower's leg as near to the ring as it can: its end and the pawl are tested against
-    // everything that goes round on the great arbor, through a whole turn (sweepOf), as well as against everything
-    // else. The shortest pawl that will pass, on the deepest bracket. The bracket is 12 m long and the pawl holds the
-    // ring against 0.8 MN at every winding, so it is not left a cantilever: a strut from its end down to the same leg
-    // makes it a triangle (behind the ring, where nothing goes round), and it carries the pawl's load by axial force.
-    const Tc = towers.find(t => t.arbor === 'center'), g = ARBOR.great, y = g.y, p0 = Tc.at(-1, y, Tc.planes[0]), swept = sweepOf(g);
-    const clear = (a, b, h, w) => !fouls(a, b, h, w) && !swept(memberBox(a, b, h, w)) && !taken(a, b, h, w, 'center');
+    const Tg = towers.find(t => t.arbor === 'great'), g = ARBOR.great, zb = Tg.planes[0], swept = sweepOf(g);
     detent = null;
-    for (const R of DETENT_RS) {
-      if (swept(pawlBox(R, y))) continue;
-      for (const ze of [PAWL_Z - 0.2, PAWL_Z - 0.35, PAWL_Z]) {
-        const p1 = [g.x + R, y, ze];
-        for (const [h, w] of [[1.6, 0.8], [1.4, 0.7], [1.2, 0.7], [1.6, 0.6], [1.2, 0.5], [0.6, 0.5]]) if (clear(p0, p1, h, w)) {
-          // the strut: from the bracket's end (the pawl's root) back down to the leg, as steep as will pass
-          let strut = null;
-          for (const drop of [6, 7.5, 5, 9, 4, 11]) {
-            const p2 = Tc.at(-1, y - drop, Tc.planes[0]), from = p1.map((v, i) => v + (p2[i] - v) * 0.9 / Math.hypot(...p2.map((u, j) => u - p1[j])));
-            for (const [sh, sw] of [[0.9, 0.6], [0.7, 0.5], [0.5, 0.4]]) if (clear(from, p2, sh, sw)) { strut = { p2, sh, sw }; break; }
-            if (strut) break;
-          }
-          detent = { p0, p1, h, w, R, strut }; break;
-        }
-        if (detent?.strut) break;
+    for (const [h, w] of [[2.0, 1.2], [1.8, 1.2], [1.6, 1.2], [1.6, 0.9], [1.4, 0.9], [1.2, 0.8]]) {
+      for (const R of DETENT_RS) {
+        const y = g.y - R, p0 = Tg.at(-1, y, zb), p1 = Tg.at(1, y, zb);
+        if (R - h / 2 - PAWL_TIP < 0.3 || swept(pawlBox(R, h, zb, w))) continue;
+        if (!fouls(p0, p1, h, w) && !swept(memberBox(p0, p1, h, w)) && !taken(p0, p1, h, w, 'great')) { detent = { p0, p1, h, w, R, y, zb }; break; }
       }
-      if (detent?.strut) break;
+      if (detent) break;
     }
   }
   lap('detent');
@@ -476,7 +468,7 @@ export function buildStructure() {
 // src/structure/design.json (window.__game.structure.seed() gives what to put there). Each is tied to the plan it
 // was made for: a fingerprint of every member's place, so that a seed for another plan is never used.
 const SEED_KEY = 'great-clock: structure sizes';
-const DESIGN_VERSION = 6;                             // (raise it when the loads or the rules change, so that no seed outlives them)
+const DESIGN_VERSION = 7;                             // (raise it when the loads or the rules change, so that no seed outlives them)
 function planSignature() {
   const r = (p) => p.map(v => Math.round(v * 100)).join(',');
   const parts = [...towers.map(T => [T.name, ...T.legs.map(m => r(m[0]) + ':' + r(m[1]) + ':' + m[3]), ...T.ties.map(m => r(m[0])), ...T.braces.map(m => r(m[0]) + r(m[1])), ...T.struts.map(m => r(m[0]) + r(m[1]))].join(';')),
@@ -616,15 +608,19 @@ function declare(out = null) {
     }
   }
   if (detent) {
-    // (welded to the centre tower's leg: part of that frame)
-    const D = redeclare('maintaining detent', 'bracket carrying the pawl that holds the maintaining ratchet while the clock is wound'), s = boxSized('maintaining detent', 'bracket', 0.5, detent.w, detent.h);
-    if (detent.strut) { const st = detent.strut, ss = boxSized('maintaining detent', 'strut', 0.5, st.sw, st.sh); D.member(st.p2, detent.p1, ss, ALLOY, 'beam', 'strut').rest(st.p2, 'tower center', 'fix'); if (out) out.push({ a: st.p2, b: detent.p1, h: ss.dims.h, w: ss.dims.b, label: 'detent', owner: 'tower center' }); }
+    // (bolted between the great tower's back legs: part of that frame) The ring bears on the pawl's tip with the springs'
+    // push at its teeth' radius, 7.7 m: MAINT.set of the weight's torque, which their stops limit them to (the ring pushes
+    // the arbor back as hard: clockwork.js). The pawl's block: its foot, bolted on the beam's face as deep as the beam; its stem,
+    // taken (conservatively) as a cantilever from the beam's axis up to the tip, PAWL[0] wide and as thick as the block;
+    // and the step forward from the block's middle to the ring's plane, where the tooth bears.
+    const D = redeclare('maintaining detent', 'beam across the great tower\'s back frame, carrying the pawl that holds the maintaining ring while the clock is wound'), s = SECTION.bar(detent.h, detent.w);
     D.frame = 'towers';
-    // the pawl is a solid steel bar built into the bracket's end, the ring's tooth bearing on its tip: a cantilever
-    const tip = [ARBOR.great.x + PAWL_TIP, detent.p1[1], PAWL_Z], root = [detent.p1[0], detent.p1[1], PAWL_Z];
-    D.member(detent.p0, detent.p1, s, ALLOY, 'beam', 'bracket').member(detent.p1, root, SECTION.box(PAWL[0], PAWL[1], PAWL[1] / 2), ALLOY, 'beam', 'pawl').member(root, tip, SECTION.box(PAWL[0], PAWL[1], PAWL[1] / 2), ALLOY, 'beam', 'pawl')
-      .force(tip, [0, -0.5 * 2.6e6 * GRAVITY * 5 / 7.7 / 10, 0], 'the ring, held', 'winding').rest(detent.p0, 'tower center', 'fix');      // (a tenth of the weight's pull at the ring's rim: the springs carry the rest round to the wheel)
-    if (out) out.push({ a: detent.p0, b: detent.p1, h: s.dims.h, w: s.dims.b, label: 'detent', owner: 'tower center' });
+    const g = ARBOR.great, b = pawlBox(detent.R, detent.h, detent.zb, detent.w), zc = b.c[2], dz = 2 * b.half[2];
+    const mid = [g.x, detent.y, detent.zb], root = [g.x, detent.y, zc], top = [g.x, g.y - PAWL_TIP, zc], tip = [g.x, g.y - PAWL_TIP, PAWL_Z];
+    D.member(detent.p0, mid, s, ALLOY, 'beam', 'beam').member(mid, detent.p1, s, ALLOY, 'beam', 'beam')
+      .member(mid, root, SECTION.bar(PAWL[0], detent.h), ALLOY, 'beam', 'pawl').member(root, top, SECTION.bar(PAWL[0], dz), ALLOY, 'beam', 'pawl').member(top, tip, SECTION.bar(PAWL[0], PAWL[0]), ALLOY, 'beam', 'pawl')
+      .force(tip, [-MAINT.set * ROPE.W * WIND.barrelR / 7.7, 0, 0], 'the maintaining ring, held while the weight is wound', 'winding').rest(detent.p0, 'tower great', 'fix').rest(detent.p1, 'tower great', 'fix');
+    if (out) out.push({ a: detent.p0, b: detent.p1, h: s.dims.h, w: s.dims.b, label: 'detent', owner: 'tower great' });
   }
   // The crossings (tower.js) are each two lattice girders, one along either edge of the deck, hung from the
   // purlins. Alone, a girder 1.2 m deep and 130 m long has nothing to hold its top chord sideways. A cross beam
@@ -666,6 +662,36 @@ function declare(out = null) {
     A.rest([-hx, y0, z], 'shell left').rest([hx, y0, z], 'shell right', 'yz');           // one shoe fixed, the other free to slide as the truss stretches
   }
   declareShell(out);
+}
+
+// ---- the dial's frame: the iron tracery the glass is set in (kit.js draws the same lines on the glass). Ribs from a
+// boss in the middle, which holds the centre arbor's third bearing (clockwork.js), out to an outer ring just inside the
+// opening; rings between, where the dial's circles are. In the band of the numerals the ribs stand only at the half
+// hours, between them. The outer ring sits on the shell's ring by a short seat at each rib. The glass (DIAL_KG_M2), the
+// wind on it and the bearing's load go to the ribs. DIAL_FRAME.z is its middle plane; it is `depth` deep. The boss is
+// a ring casting `boss` in radius, bored for the bearing the hour pipe (2.1 m) turns in; the centre arbor turns in the
+// pipe. (Analysed as the ribs run on into the middle: the boss is as stiff as they are.)
+const DIAL_FRAME = { z: SHAFT.center.dial, depth: 2.4, rings: [0.12, 0.5, 0.86, 0.955], out: DIAL.r - 1.0, boss: 3.2 };
+function declareDialFrame(seats, out) {
+  const TAU = 2 * Math.PI, F = DIAL_FRAME, A = redeclare('dial frame', 'the dial\'s frame of steel ribs and rings, the glass set in it, on the shell\'s ring'), R = DIAL.r, n = 24;
+  const at = (r, j) => [DIAL.x + r * Math.cos(j * TAU / n), DIAL.y + r * Math.sin(j * TAU / n), F.z], radii = [0, ...F.rings.map(k => k * R), F.out];
+  const press = windOn([0, 0, 1]), rib = boxSized('dial frame', 'rib', 0.5, F.depth, 1.6, 5), ring = boxSized('dial frame', 'ring', 0.35, F.depth, 1.2, 7), seat = boxSized('dial frame', 'seat', 0.6, F.depth, 2.0, 4);
+  if (out) dialDrawn = [];
+  const put = (a, b, sec, label, trib = 0) => {
+    A.member(a, b, sec, ALLOY, 'beam', label, trib ? { lines: Object.fromEntries(Object.entries(press).map(([k, v]) => [k, v.map(x => x * trib)])) } : null, DIAL_KG_M2 * GRAVITY * trib);
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]), from = Math.hypot(a[0] - DIAL.x, a[1] - DIAL.y) < 1e-6 ? a.map((v, k) => v + (b[k] - v) * F.boss / L) : a;      // (a rib starts at the boss)
+    if (out) dialDrawn.push({ a: from, b, h: sec.dims.h, w: F.depth });
+  };
+  for (let j = 0; j < n; j++) for (let i = 0; i < radii.length - 1; i++) {
+    const numerals = i === 2, ribs = numerals ? n / 2 : n;
+    if (numerals && j % 2 === 0) continue;                  // (j even: an hour; the numeral stands there)
+    put(at(radii[i], j), at(radii[i + 1], j), rib, 'rib', TAU * (radii[i] + radii[i + 1]) / 2 / ribs);
+  }
+  for (const r of radii.slice(1)) for (let j = 0; j < n; j++) put(at(r, j), at(r, j + 1), ring, 'ring');
+  for (let j = 0; j < n; j++) {
+    const a = at(F.out, j), q = seats.reduce((b, p) => Math.hypot(p[0] - a[0], p[1] - a[1]) < Math.hypot(b[0] - a[0], b[1] - a[1]) ? p : b);
+    put(a, q, seat, 'seat'); A.rest(q, 'shell front', 'pin');
+  }
 }
 
 // ---- the shell: a steel frame with brick panels between
@@ -803,8 +829,11 @@ function stoneOn(name, k, a, b, first, last) {
 // and wide, in the plane of the maintaining ring (PAWL_Z: the ring is 19.95 to 20.35, clockwork.js), reaches in from
 // there to PAWL_TIP, just clear of the tips of the ring's teeth (7.7 m), which it drops between. Nothing else goes
 // round in that plane beyond the teeth: the maintaining springs lie between the ring's face and the wheel's.
-const DETENT_RS = [8.4, 8.8, 9.2, 9.6, 10.2], PAWL_TIP = 7.75, PAWL = [0.8, 0.36], PAWL_Z = 20.15;
-const pawlBox = (R, y) => obb([ARBOR.great.x + (R + PAWL_TIP) / 2, y, PAWL_Z], [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [(R - PAWL_TIP) / 2, PAWL[0] / 2, PAWL[1] / 2]);
+// (now: its beam is R below the great arbor in the plane of the tower's back frame, h deep and w thick; the pawl, a
+// block PAWL[0] wide, bolted on the beam's front face from its foot up to PAWL_TIP and forward to the front of the
+// ring's plane PAWL_Z (20.5 to 20.9, clockwork.js); PAWL[1], the ring's thickness)
+const DETENT_RS = [8.7, 9.0, 9.4, 9.8, 10.4, 11.0], PAWL_TIP = 7.75, PAWL = [2.0, 0.36], PAWL_Z = LAYER.C - 1.3;
+const pawlBox = (R, h, zb, w) => { const y0 = ARBOR.great.y - R - h / 2, y1 = ARBOR.great.y - PAWL_TIP, z0 = zb + w / 2, z1 = PAWL_Z + PAWL[1] / 2; return obb([ARBOR.great.x, (y0 + y1) / 2, (z0 + z1) / 2], [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [PAWL[0] / 2, (y1 - y0) / 2, (z1 - z0) / 2]); };
 // What goes round on an arbor sweeps a solid of revolution: everything drawn on it, every vertex, turned through a whole
 // turn. sweepOf(a)(box) says whether a box that stands still (an oriented box, obb()) is anywhere in it: whether, at
 // some height along the arbor, some vertex is as far from the axis as some part of the box at that height.
@@ -956,26 +985,27 @@ function declareShell(out) {
       }
     }
     // the ring round the dial: the wall over the opening stands on it, and it carries that round to the columns
-    // either side; the dial's glass, and the wind on it, bear on it all round (half its radius to a metre of ring)
+    // either side; the dial's frame (declareDialFrame) sits on it at every one of its ribs
     if (W.dial) {
       const meets = ringPts.slice();
-      for (let k = 0; k < 36; k++) {
-        const p = [DIAL.x + RING * Math.cos(k * Math.PI / 18), DIAL.y + RING * Math.sin(k * Math.PI / 18)];
+      for (let k = 0; k < 48; k++) {
+        const p = [DIAL.x + RING * Math.cos(k * Math.PI / 24), DIAL.y + RING * Math.sin(k * Math.PI / 24)];
         if (!meets.some(m => Math.hypot(m[0] - p[0], m[1] - p[1]) < 2.5)) ringPts.push(p);
       }
       ringPts.sort((p, q) => Math.atan2(p[1] - DIAL.y, p[0] - DIAL.x) - Math.atan2(q[1] - DIAL.y, q[0] - DIAL.x));
       const f = stone.faces[W.name], left = f.bands.reduce((t, band, k) => t + (k ? band.reduce((x, v) => x + v, 0) - f.covered[k] : 0), 0);
       const around = ringPts.reduce((t, p, i) => t + Math.hypot(ringPts[(i + 1) % ringPts.length][0] - p[0], ringPts[(i + 1) % ringPts.length][1] - p[1]), 0);
-      // the dial's glass, the stone rim round it, and the stone of the clock panel that stands over the opening, all round the ring
-      const sec = wallBox(`${W.name}|ring`, 1.2, 4.0, WALL_T), glass = DIAL_KG_M2 * GRAVITY * DIAL.r / 2 + (stone.rim + left) * GRAVITY / around;
+      // the stone rim round it, and the stone of the clock panel that stands over the opening, all round the ring
+      const sec = wallBox(`${W.name}|ring`, 1.2, 4.0, WALL_T), glass = (stone.rim + left) * GRAVITY / around;
       ringPts.forEach((p, i) => {
         const q = ringPts[(i + 1) % ringPts.length], ym = (p[1] + q[1]) / 2, xm = (p[0] + q[0]) / 2, len = Math.hypot(q[0] - p[0], q[1] - p[1]);
         if (len < 0.1) return;
         // above the dial the wall up to the next girder stands on the ring
         const over = ym > DIAL.y ? ((Math.abs(xm - DIAL.x) < chord(180 - DIAL.y) ? ROOF.eaves : 180) - ym) : 0;
-        A.member(P(p[0], p[1]), P(q[0], q[1]), sec, ALLOY, 'beam', 'ring', { lines: lines(DIAL.r / 2) }, Math.max(0, over) * BRICK_PER_M2 * Math.abs(q[0] - p[0]) / len + glass);
+        A.member(P(p[0], p[1]), P(q[0], q[1]), sec, ALLOY, 'beam', 'ring', { lines: lines(sec.dims.h) }, Math.max(0, over) * BRICK_PER_M2 * Math.abs(q[0] - p[0]) / len + glass);
         draw(P(p[0], p[1]), P(q[0], q[1]), sec.dims.h, WALL_T, 'ring');
       });
+      declareDialFrame(ringPts.map(p => P(p[0], p[1])), out);
     }
   }
   declareStairTowers(); declareEscape(); declareStack(); declareCrown(out);
@@ -1568,7 +1598,15 @@ function draw() {
     // the cap over the front bearing that the yoke's upper beam is bolted to (the lower is bolted under the head casting)
     { const c = wind.yoke.caps[0]; ibox('iron', 2 * SHAFT.great.r + 1.2, c[1][1] - c[0][1] - 1.75 - 0.3, 0.9, c[0][0], (c[0][1] + 1.75 + c[1][1] - 0.3) / 2, c[0][2]); }
   }
-  if (detent) { G.tag = 'bearing'; ibox('steel', detent.R - PAWL_TIP, PAWL[0], PAWL[1], ARBOR.great.x + (detent.R + PAWL_TIP) / 2, detent.p1[1], PAWL_Z); G.tag = 'structure'; }       // the pawl itself, bolted to the bracket's side
+  if (detent) {       // the pawl, bolted to the beam's face
+    const b = pawlBox(detent.R, detent.h, detent.zb, detent.w); G.tag = 'bearing'; ibox('steel', 2 * b.half[0], 2 * b.half[1], 2 * b.half[2], ...b.c); G.tag = 'structure';
+  }
+  for (const m of dialDrawn) { const d = m.b.map((v, i) => v - m.a[i]), L = Math.hypot(d[0], d[1]); _q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.atan2(d[1], d[0])); ibox('iron', L + m.h * 0.5, m.h, m.w, (m.a[0] + m.b[0]) / 2, (m.a[1] + m.b[1]) / 2, m.a[2], _q.clone()); }
+  if (dialDrawn.length) {         // the dial frame's boss: a ring round the hour pipe's bearing, the ribs' inner ends cast into it
+    const F = DIAL_FRAME, ri = 2.25, n = 16, rm = (ri + F.boss) / 2; G.tag = 'bearing';
+    for (let k = 0; k < n; k++) { const a = (k + 0.5) * 2 * Math.PI / n; _q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), a); ibox('iron', F.boss - ri, 2 * Math.PI * F.boss / n + 0.05, F.depth, DIAL.x + Math.cos(a) * rm, DIAL.y + Math.sin(a) * rm, F.z, _q.clone()); }
+    G.tag = 'structure';
+  }
   for (const h of hung) {
     tube('tendon', [h.x, h.e.y, h.e.z], [h.x, ROOF.at(h.x) + 0.4, h.e.z], 0.03);
     iknob('steel', 0.07, h.x, h.e.y, h.e.z); ibox('iron', 0.1, 0.5, 0.1, h.x, h.e.y + 1.9, h.e.z);
@@ -1613,11 +1651,29 @@ export function structuralCheck() {
   for (let i = 0; i < solids.length; i++) for (let j = i + 1; j < solids.length; j++)
     if (boxes[i] && boxes[j] && solids[i].owner && solids[j].owner && solids[i].owner !== solids[j].owner && !solids[i].joins?.includes(solids[j].owner) && !solids[j].joins?.includes(solids[i].owner) && overlaps(boxes[i], boxes[j]))       // (a link is bolted to both towers it joins)
       clashes.push(`${solids[i].what} of ${solids[i].owner} at ${where(solids[i])} against ${solids[j].what} of ${solids[j].owner} at ${where(solids[j])}`);
+  // ... and what the floor wheels' teeth sweep as they go round, not only where they are now: nothing fixed may be under
+  // a rim, between the teeth's underside and the shroud's top. Each solid and each thing drawn near one is tried at points
+  // 0.2 m apart through the part of it that is level with the teeth.
+  {
+    const within = (o, p) => [0, 1, 2].every(i => Math.abs((p[0] - o.c[0]) * o.ax[i][0] + (p[1] - o.c[1]) * o.ax[i][1] + (p[2] - o.c[2]) * o.ax[i][2]) < o.half[i] - 0.03);
+    const sweeps = ENVELOPES.filter(e => e.floor), near = [...solids.map((q, i) => boxes[i] && { o: boxes[i], what: q.what }), ...DRAWN.filter(o => o.tag !== 'outside' && o.tag !== 'bearing').map(o => ({ o: obb(o.c, axesOf(o.q), o.half), what: 'something drawn' }))].filter(Boolean);
+    for (const e of sweeps) for (const { o, what } of near) {
+      const lo = [Math.max(o.lo[0], e.x - e.r), Math.max(o.lo[1], e.y0), Math.max(o.lo[2], e.z - e.r)], hi = [Math.min(o.hi[0], e.x + e.r), Math.min(o.hi[1], e.y1), Math.min(o.hi[2], e.z + e.r)];
+      if (lo.some((v, i) => v >= hi[i])) continue;
+      const n = lo.map((v, i) => Math.max(1, Math.ceil((hi[i] - v) / 0.2))), at = (i, k) => lo[i] + (k + 0.5) * (hi[i] - lo[i]) / n[i];
+      let hit = null;
+      for (let i = 0; i < n[0] && !hit; i++) for (let k = 0; k < n[2] && !hit; k++) {
+        const x = at(0, i), z = at(2, k);
+        if (Math.hypot(x - e.x, z - e.z) < e.r) for (let j = 0; j < n[1]; j++) if (within(o, [x, at(1, j), z])) { hit = [x, at(1, j), z]; break; }
+      }
+      if (hit) clashes.push(`${what} at (${hit.map(v => v.toFixed(1)).join(', ')}) under the teeth of the floor wheel at (${e.x.toFixed(0)}, ${e.z.toFixed(0)})`);
+    }
+  }
   // ... the machinery against everything fixed that is not machinery: each of its colliders,
   const machine = (h) => G.parts.has(h) || G.machineFixed.has(h), seen = new Set();
   G.world.colliders.forEach((c) => {
     if (!machine(c.handle)) return;
-    const sh = c.shape, he = sh.halfExtents, slim = he ? new G.R.Cuboid(he.x - 0.04, he.y - 0.04, he.z - 0.04) : sh.halfHeight !== undefined && sh.radius > 0.1 ? new G.R.Cylinder(sh.halfHeight - 0.04, sh.radius - 0.04) : sh;      // (touching is not overlapping)
+    const sh = c.shape, he = sh.halfExtents, slim = he ? new G.R.Cuboid(he.x - 0.04, he.y - 0.04, he.z - 0.04) : sh.halfHeight !== undefined && sh.radius > 0.1 ? new G.R.Cylinder(Math.max(0.005, sh.halfHeight - 0.04), sh.radius - 0.04) : sh;      // (touching is not overlapping)
     G.world.intersectionsWithShape(c.translation(), c.rotation(), slim, (o) => {
       const body = o.parent();
       if (machine(o.handle) || own.has(o.handle) || o.handle === G.ground?.handle || o.handle === G.glass?.handle || (body && body.isDynamic())) return true;      // (the hands' arbor goes out through the middle of the dial glass)
@@ -1648,7 +1704,7 @@ export function structuralCheck() {
   };
   for (const grp of G.machines) grp.updateWorldMatrix(true, true);          // (they are only brought up to date when a frame is drawn)
   for (const grp of G.machines) grp.traverse((o) => {
-    if (!o.isMesh) return;
+    if (!o.isMesh || o.userData.ghost) return;          // (a hand's shadow on the glass is not a thing)
     const pos = o.geometry.attributes.position, shaft = !!o.userData.shaft; let hit = null, at = null; parts++;
     if (o.isInstancedMesh) {
       if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
@@ -1728,7 +1784,7 @@ export function structuralCheck() {
   // great arbor turns, so they are tested against all of that turned through a whole turn, not where it is now.
   if (detent) {
     const swept = sweepOf(ARBOR.great), boxOf = (c) => { const t = c.translation(), he = c.shape.halfExtents, r = c.rotation(); return obb([t.x, t.y, t.z], axesOf(new THREE.Quaternion(r.x, r.y, r.z, r.w)), [he.x, he.y, he.z]); };
-    for (const [what, box] of [['pawl', pawlBox(detent.R, detent.p1[1])], ...solids.filter(q => q.what === 'detent').map((q, i) => [i ? 'strut' : 'bracket', boxOf(q.collider)])]) {
+    for (const [what, box] of [['pawl', pawlBox(detent.R, detent.h, detent.zb, detent.w)], ...solids.filter(q => q.what === 'detent').map((q) => ['beam', boxOf(q.collider)])]) {
       const hit = swept(box);
       if (hit) clashes.push(`the maintaining detent's ${what} stands in the path of something carried round on the great arbor (${hit.r.toFixed(2)} m out, at z ${hit.z.toFixed(2)}), which will strike it once a turn`);
     }
@@ -1778,6 +1834,16 @@ export function structuralCheck() {
     extra.push({ name: 'doors: every leaf swung', ok: bad.length === 0,
       verdict: bad.length ? `${bad.length} of ${DOOR_LEAVES.length} leaves foul something: ${bad.slice(0, 6).join('; ')}${bad.length > 6 ? '; ...' : ''}` : `${DOOR_LEAVES.length} leaves in ${new Set(DOOR_LEAVES.map(L => L.door)).size} doorways (${ways} of them double-acting), each swung through its travel in ${steps.toLocaleString('en')} steps in all, foul nothing fixed and no space kept clear but their own doorway's` });
   }
+  // The dial's frame: how far the wind moves it (the glass in it, and the hands' clearance, want it stiff)
+  {
+    const F = DIAL_FRAME, pts = [[DIAL.x, DIAL.y, F.z], [DIAL.x, DIAL.y + 0.5 * DIAL.r, F.z], [DIAL.x + 0.86 * DIAL.r * Math.cos(Math.PI / 12), DIAL.y + 0.86 * DIAL.r * Math.sin(Math.PI / 12), F.z]];
+    let worst = 0;
+    for (const p of pts) for (const c of ['wind +z', 'wind -z', 'dead']) { const d = displacement(res, 'dial frame', p, { [c]: 1 }); if (d) worst = Math.max(worst, Math.hypot(...d)); }
+    const lim = DIAL.r / 250, A = getAssembly('dial frame');
+    extra.push({ name: 'dial frame: stiffness', ok: worst <= lim && !!A,
+      verdict: `${A ? A.members.length : 0} ribs, rings and seats, ${F.depth} m deep: under its own weight, the glass's and the wind on the dial it moves at most ${(worst * 1000).toFixed(0)} mm (allowed ${(lim * 1000).toFixed(0)}, a 250th of the radius); the boss holds the centre arbor's third bearing` });
+  }
+  if (POWER.rows) extra.push(...POWER.rows());
   // Power: can the driving weight keep the clock going?
   if (POWER.budget) {
     const b = POWER.budget(), kW = (v) => (v / 1000).toFixed(1);

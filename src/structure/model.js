@@ -50,6 +50,14 @@ export const MATERIAL = {
 export const BUCKLING_FACTOR = 2.5;          // what each frame's elastic critical load factor must at least be
 export const PHI = 1 / 200;                  // sway imperfection
 export const FATIGUE = { pendulum: 52e6 * 0.549 / 0.737 / 1.35, winding: 71e6 * Math.cbrt(2e6 / 4.4e5) / 1.35 };   // stress ranges: below the cut-off; at 440,000 cycles
+// Turning shafts (opts.turns: how many turns one makes in a century). Each fibre of a shaft that carries a bending
+// moment goes from tension to compression and back once a turn, so a shaft is checked for fatigue in rotating bending:
+// alloy steel of 1,000 MPa, its endurance 195 MPa (half its strength, times 0.6 for the size, 0.8 for a turned surface
+// and 0.814 for 99 % survival) from a million turns on, and from 0.9 of its strength at a thousand turns along a straight
+// line on log-log axes below that. At the seat of a wheel's hub, where every moment on an arbor peaks, a shrink fit
+// raises the stress by Kf; gamma on the stress; the mean shear of the torque it carries, by Goodman.
+export const ROTATING = { uts: 1000e6, Se: 195e6, knee: 1e6, Kf: 2.0, gamma: 1.35 };
+export const rotatingAllowed = (N) => { const R = ROTATING; return N >= R.knee ? R.Se : 0.9 * R.uts * (Math.max(N, 1e3) / 1e3) ** (Math.log10(R.Se / (0.9 * R.uts)) / 3); };
 
 // Sections. Iz resists bending in the vertical plane (see solve.js axes()); Z = I / c.
 // Each also knows its plates (for local buckling), its shear areas and its torsion modulus.
@@ -103,7 +111,7 @@ class Assembly {
   // weight (the wall standing on a girder).
   member(a, b, section, material = MATERIAL.steel, kind = 'beam', label = '', opts = null, carries = 0) {
     if (Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) < 2 * SNAP) return this;
-    this.members.push({ a: this.node(a), b: this.node(b), section, material, kind, label, carries, lines: (opts && typeof opts === 'object' && opts.lines) || null });
+    this.members.push({ a: this.node(a), b: this.node(b), section, material, kind, label, carries, lines: (opts && typeof opts === 'object' && opts.lines) || null, turns: (opts && typeof opts === 'object' && opts.turns) || 0 });
     return this;
   }
   mass(p, kg, label = '') { this.masses.push({ n: this.node(p), kg, label }); return this; }
@@ -409,7 +417,7 @@ function solveGroup(grp, groupOf, opts) {
   // ---- every member against every combination
   const worst = list.map(() => ({ u: 0 }));
   const comb = new Float64Array(12), cq = [0, 0, 0];
-  const ip = cix.get('pendulum'), iw = cix.get('winding');
+  const ip = cix.get('pendulum'), iw = cix.get('winding'), idd = cix.get('dead'), itt = cix.get('teeth');
   live.forEach((k, i) => {
     const m = members[k], ai = owner[k], L = second.cases[0].forces[i].L;
     let best = { u: 0 };
@@ -424,6 +432,16 @@ function solveGroup(grp, groupOf, opts) {
         if (c === undefined) continue;
         const F = second.cases[c].forces[i], r = k2 * range(m, F.f, F.q, L) / limit;
         if (r > best.u) best = { u: r, why: name, stress: k2 * range(m, F.f, F.q, L), N: F.N };
+      }
+    }
+    if (m.turns && idd !== undefined) {
+      // a solid round shaft: bending under its own weight, its wheels' and the teeth's pushes, which stand still while it turns
+      const s = m.section, r = Math.sqrt(s.A / Math.PI), R = ROTATING, at = rotatingAllowed(m.turns) / (R.Kf * R.gamma);
+      for (const e of [0, 6]) {
+        let My = 0, Mz = 0, T = 0;
+        for (const c of [idd, itt]) if (c !== undefined) { const f = second.cases[c].forces[i].f; My += f[e + 4]; Mz += f[e + 5]; T += f[e + 3]; }
+        const sa = Math.hypot(My, Mz) * r / s.Iz, sm = Math.sqrt(3) * Math.abs(T) * r / (2 * s.Iz), u = sa / (at * Math.max(0.05, 1 - sm / R.uts));
+        if (u > best.u) best = { u, why: `fatigue (turning, ${m.turns.toExponential(1)} turns)`, stress: sa };
       }
     }
     const pl = plates(m);

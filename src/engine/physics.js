@@ -23,12 +23,11 @@ const P = {
   clearance: 0.05,                   // dead volume at each end, as a fraction of the swept volume
   back: 0.12e5,                      // exhaust back pressure, Pa
   inertia: 1.2e7,                    // flywheel and train, kg m^2
-  c0: 2.5e5, c1: 2e5, c2: 3e5,       // load torque = c0 + c1 w + c2 w^2, N m
   barring: 0.03,                     // creep off a dead centre, rad/s
   govRatio: 2.4, govDamp: 3,         // governor spindle turns this much faster than the crank
   govMin: 17 * DEG, govMax: 69 * DEG,
-  govOpen: 30 * DEG, govShut: 58 * DEG,   // arm angles between which the throttle goes from wide open to closed
-  fire: 0.582, setPoint: 5.2,        // firing rate that holds the set pressure (bar) at the nominal load
+  govOpen: 18 * DEG, govShut: 46 * DEG,   // arm angles between which the throttle goes from wide open to closed (set so that it runs at NOMINAL turning the floor train)
+  fire: 0.125, setPoint: 5.2,        // firing rate that holds the set pressure (bar) turning the floor train; while it winds the damper fires it harder
   capacity: 10,                      // how slowly boiler pressure answers
   lift: 6.0, reseat: 5.55, vent: 0.14,    // safety valve, bar and bar/s
 };
@@ -63,7 +62,7 @@ export class EngineSim {
     this.govV = 0;
     this.throttle = 0.56;      // what the regulator and governor together let through, 0..1
     this.venting = false;      // safety valve lifted
-    this.extra = 0;            // further load on the crank, N m: the winding gear, when it is engaged
+    this.load = 0;             // what the crank turns against, N m: the floor train, and the winding gear while it winds (clock/clockwork.js engineLoad)
     this.tap = 0;              // steam taken off the boiler for something else (the hoist's engine), in the units of the draw below
     this.half = null;
     this.onExhaust = null;     // (strength) once per stroke
@@ -82,8 +81,8 @@ export class EngineSim {
 
     // crank: steam torque against load and inertia
     const tq = torque(phi, this.p * 1e5 * this.throttle);
-    if (this.w > 1e-4) this.w = Math.max(0, this.w + (tq - P.c0 - this.extra - P.c1 * this.w - P.c2 * this.w * this.w) / P.inertia * dt);
-    else if (tq > P.c0 + this.extra) this.w = (tq - P.c0 - this.extra) / P.inertia * dt;
+    if (this.w > 1e-4) this.w = Math.max(0, this.w + (tq - this.load) / P.inertia * dt);
+    else if (tq > this.load) this.w = (tq - this.load) / P.inertia * dt;
     else this.w = this.throttle > 0 ? P.barring : 0;      // stuck near a dead centre: bar it round
 
     const half = Math.floor(phi / Math.PI);
@@ -98,7 +97,7 @@ export class EngineSim {
     if (this.gov > P.govMax) { this.gov = P.govMax; this.govV = Math.min(0, this.govV); }
 
     // boiler: the damper answers a pressure drop with a harder fire, and the safety valve caps it
-    const fire = P.fire * clamp(1 + 1.5 * (P.setPoint - this.p), 0.35, 2.2);
+    const fire = P.fire * clamp(1 + 1.5 * (P.setPoint - this.p), 0.35, 4);
     const draw = (this.w / NOMINAL) * this.throttle * this.p / 5 + this.tap;
     this.p += ((fire - draw) / P.capacity - (this.venting ? P.vent : 0)) * dt;
     if (!this.venting && this.p > P.lift) { this.venting = true; if (this.onVent) this.onVent(true); }

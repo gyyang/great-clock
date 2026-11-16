@@ -34,7 +34,7 @@ export function buildEngine(clock, scene) {
   const _t = { x: O.x, y: E.axisY, z: 0 }, _q = { x: 0, y: 0, z: 0, w: 1 };
   function update(dt) {
     const a = crankAngle();
-    sim.extra = clock.state.winding ? clock.windTorque : 0;       // lifting the driving weight is work the engine has to do
+    sim.load = clock.engineLoad();       // the floor train, and the winding gear and the weight while it winds
     sim.step(dt, a);
     clock.state.floorRate = sim.w / NOMINAL;
     const r = rodPose(a);                                  // the rod is a solid, moving body

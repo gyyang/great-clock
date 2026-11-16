@@ -21,11 +21,12 @@ export function spec(N, m, t, o = {}) {
     N, m, t, r, ra: r + m, rr, rb: r * Math.cos(PA), pa: TAU / N, spokes,
     spokeW: o.spokeW || Math.min(2.6, m * 2.4), hubR, rimIn,
     recess: !spokes && rimIn - hubR > 0.8,          // solid pinions still get a dished face
+    fab: !!o.fab, hubH: o.hubH,                     // fabricated (bronze toothed segments bolted on a steel centre), and a hub shorter than usual
   };
 }
 
 // How far a wheel's hub stands out from its middle: proud of the rim on both faces, by at most 0.3 m.
-export const hubHalf = (s) => Math.min(s.t * 0.64, s.t / 2 + 0.3);
+export const hubHalf = (s) => s.hubH ?? Math.min(s.t * 0.64, s.t / 2 + 0.3);
 
 // Involute tooth outline, counter-clockwise.
 export function gearOutline(s) {
@@ -99,7 +100,8 @@ export function extrude(shape, t, bevel = 0.1, curveSegments = 10, bevelSegments
 }
 
 // Rim + web + hub merged into one mesh, with smooth normals across curved faces.
-export function gearGeometry(s, outline) {
+// (which: 'rim' for the toothed rim alone, 'centre' for the web and hub alone: a fabricated wheel's two parts)
+export function gearGeometry(s, outline, which = null) {
   const parts = [], cs = (R) => Math.min(220, Math.max(48, Math.round(R * 5)));
   const cut = s.spokes > 0 || s.recess;
   const rim = new THREE.Shape(outline || gearOutline(s));
@@ -112,7 +114,8 @@ export function gearGeometry(s, outline) {
     const h = hubHalf(s), c = Math.min(0.22, h * 0.3), R = s.hubR;
     parts.push(planarUV(new THREE.LatheGeometry([[0.01, -h], [R - c, -h], [R, -h + c], [R, h - c], [R - c, h], [0.01, h]].map(p => new THREE.Vector2(p[0], p[1])), 56).rotateX(Math.PI / 2)));
   }
-  const merged = mergeGeometries(parts.map(g => (g.index ? g.toNonIndexed() : g)));
+  const use = which === 'rim' ? parts.slice(0, 1) : which === 'centre' ? parts.slice(1) : parts;
+  const merged = mergeGeometries(use.map(g => (g.index ? g.toNonIndexed() : g)));
   return toCreasedNormals(merged, 0.7);
 }
 
