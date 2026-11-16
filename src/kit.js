@@ -233,6 +233,11 @@ function makeMaterials() {
   // cast iron in the works' green enamel with gold lining; railings and small fittings in black
   MAT.iron = surface('iron', { color: 0x1f5245, roughness: 0.8, lining: 0xc9a24a, age: [0.85, 0.85, 0.82, 0.12], macro: [0.06, 0.06, 0.5, 0.1] });
   MAT.rail = surface('iron', { color: 0x17191c, roughness: 0.75, seed: 1, macro: [0.05, 0.06, 0.8, 0.08] });
+  // the outside of the tower: dressed stone, weathered copper, gilding
+  MAT.facade = surface('stone', { color: 0xf0e2c6, macro: [0.12, 0.06, 0.08, 0.15], wall: [0.18, 1.0, 0, 0.1] });
+  MAT.verdigris = S({ color: 0x4d8f7c, roughness: 0.62, metalness: 0.35 });
+  MAT.gilt = S({ color: 0xe0b23c, roughness: 0.22, metalness: 1.0 });
+  for (const m of [MAT.facade, MAT.verdigris, MAT.gilt]) m.userData.outdoor = true;
   MAT.tendon = S({ color: 0x0c0d0f, roughness: 0.38, metalness: 0.15 });                                // carbon-fibre tendons: what the heavy loads hang on
   MAT.rivet = surface('brass', { color: 0x8a6f40, p: [0.5, 0, 0, 0], seed: 3 });
   MAT.handrail = surface('brass', { color: 0xc9983f, roughness: 0.8, seed: 4, macro: [0.05, 0.06, 0.8, 0.05] });       // polished by hands

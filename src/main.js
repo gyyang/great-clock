@@ -5,6 +5,7 @@ import { initKit, flushBatches, MAT } from './kit.js';
 import { buildTower } from './world/tower.js';
 import { buildStructure, structuralCheck } from './world/structure.js';
 import { buildCity } from './world/city.js';
+import { buildFacade } from './world/facade.js';
 import { buildProps } from './world/props.js';
 import { buildClockwork } from './clock/clockwork.js';
 import { buildEngine } from './engine/engine.js';
@@ -25,6 +26,7 @@ async function main() {
   const env = createEnv(canvas);
   initKit(env.scene, world, RAPIER, env.renderer);
   buildTower();
+  buildFacade();
   const city = buildCity();
   const clock = buildClockwork();
   const engine = buildEngine(clock, env.scene);

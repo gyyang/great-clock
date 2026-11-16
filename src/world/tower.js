@@ -15,7 +15,7 @@ const TAU = Math.PI * 2;
 function shell() {
   const { hx, hz, H, wall } = TOWER, ox = hx + wall, oz = hz + wall, scene = G.scene;
 
-  cbox(6000, 2, 6000, 0, -1, 0);                                  // the ground, inside and out
+  G.ground = cbox(6000, 2, 6000, 0, -1, 0);                       // the ground, inside and out
   tplane(MAT.plate, -ox, ox, -oz, oz, 0, 4);
   const E = 3000;
   tplane(MAT.ground, -E, E, oz, E, 0); tplane(MAT.ground, -E, E, -E, -oz, 0);
@@ -52,19 +52,7 @@ function shell() {
   bezel.position.copy(glass.position); scene.add(bezel);
   G.world.createCollider(G.R.ColliderDesc.cylinder(0.25, DIAL.r).setRotation(QX).setTranslation(DIAL.x, DIAL.y, DIAL.z));
 
-  // Roof and cornice (seen from outside)
-  ibox('stone', 2 * ox + 6, 4, 2 * oz + 6, 0, H + wall + 2, 0);
-  const roof = new THREE.Mesh(new THREE.ConeGeometry(1, 70, 4, 1).rotateY(Math.PI / 4), MAT.slate);
-  roof.scale.set((ox + 3) / Math.SQRT1_2, 1, (oz + 3) / Math.SQRT1_2);
-  roof.position.set(0, H + wall + 4 + 35, 0); scene.add(roof);
-
-  // Facade relief. The windows are person-sized: they are what tells you how big the dial is.
-  const zf = hz + wall;
-  for (let y = 8; y <= 62; y += 9) for (let x = -54; x <= 54; x += 6) {
-    if (Math.abs(x) < 4 && y < 12) continue;
-    if (Math.abs(x - Math.round(x / 10) * 10) < 2 || Math.abs(y - Math.round(y / 30) * 30) < 3.5) continue;     // not where a column or a girder runs
-    ibox('stone', 1.9, 3.6, 0.3, x, y, zf + 0.1); ibox('window', 1.3, 3, 0.3, x, y, zf + 0.16);
-  }
+  // (plinth, piers, the clock panel, the turrets and everything above the cornice: facade.js)
 }
 
 function galleries() {

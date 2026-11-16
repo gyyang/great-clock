@@ -45,9 +45,15 @@ class Mover {
   angVelY() { return 0; }
 }
 
+// What each turning part sweeps as it turns: a disc of its tip radius between two planes (wheels
+// and arbors on the going train), or a disc lying on the floor (the floor wheels). Anything fixed
+// has to stay out of these, whatever the teeth happen to be doing when it is placed.
+export const ENVELOPES = [];
+
 // ------------------------------------------------------------- part makers
 function mountGear(rotor, s, z, mat) {
   const m = new THREE.Mesh(gearGeometry(s), mat); m.position.z = z; rotor.group.add(m);
+  ENVELOPES.push({ x: rotor.center.x, y: rotor.center.y, r: s.ra, z0: z - s.t / 2, z1: z + s.t / 2 });
   addGearColliders(rotor, s, z);
   if (s.spokes || s.recess) {
     rivetRing(m, (s.rr + s.rimIn) / 2, Math.round(s.r * 3.2), s.t / 2);
@@ -56,6 +62,7 @@ function mountGear(rotor, s, z, mat) {
   return m;
 }
 function mountArbor(rotor, z0, z1, r) {
+  ENVELOPES.push({ x: rotor.center.x, y: rotor.center.y, r: r * 1.35, z0: z0 - 0.3, z1: z1 + 0.3 });
   const g = new THREE.CylinderGeometry(r, r, z1 - z0, 28); g.rotateX(Math.PI / 2);
   const m = new THREE.Mesh(g, MAT.steel); m.position.z = (z0 + z1) / 2; rotor.group.add(m);
   rotor.addCollider(G.R.ColliderDesc.cylinder((z1 - z0) / 2, r).setRotation(QX).setTranslation(0, 0, (z0 + z1) / 2));
@@ -162,6 +169,7 @@ export function buildClockwork() {
   {
     const m = new THREE.Mesh(gearGeometry(S.esc, escapeOutline(S.esc)), MAT.brass); m.position.z = LAYER.esc; rEsc.group.add(m);
     addEscapeColliders(rEsc, S.esc, LAYER.esc);
+    ENVELOPES.push({ x: rEsc.center.x, y: rEsc.center.y, r: S.esc.R, z0: LAYER.esc - S.esc.t / 2, z1: LAYER.esc + S.esc.t / 2 });
     rivetRing(m, (S.esc.rr + S.esc.rimIn) / 2, 40, S.esc.t / 2);
     boltCircle(m, S.esc.hubR * 0.7, 8, S.esc.t * 0.64, 0.26);
   }
@@ -205,6 +213,7 @@ export function buildClockwork() {
     const g = new THREE.CylinderGeometry(5, 5, 4, 40); g.rotateX(Math.PI / 2);
     const barrel = new THREE.Mesh(g, MAT.bronze); barrel.position.z = 27; rGreat.group.add(barrel);
     rGreat.addCollider(R.ColliderDesc.cylinder(2, 5).setRotation(QX).setTranslation(0, 0, 27));
+    ENVELOPES.push({ x: rGreat.center.x, y: rGreat.center.y, r: 6, z0: 24.8, z1: 29.2 });
     for (const z of [25, 29]) { const fl = new THREE.Mesh(new THREE.CylinderGeometry(6, 6, 0.4, 40).rotateX(Math.PI / 2), MAT.iron); fl.position.z = z; rGreat.group.add(fl); }
     const now = new Date(), frac = ((now.getHours() % 8) * 3600 + now.getMinutes() * 60) / 28800;
     const wx = ARBOR.great.x - 5, wTop = 72 - TAU * 5 * frac;
@@ -243,6 +252,7 @@ export function buildClockwork() {
       addGearColliders(r, s, 0);                                                                      // every tooth is solid: stand in its way and it hits you
       r.addCollider(R.ColliderDesc.cylinder(0.05, s.r).setRotation(QX).setTranslation(0, 0, t / 2 + 0.05));   // the shroud you walk on
       icyl('iron', Math.min(3, s.r * 0.4), cy - t / 2, d.x, (cy - t / 2) / 2, d.z);
+      ENVELOPES.push({ floor: true, x: d.x, z: d.z, r: s.ra, top: F.top + 0.1 });
       r.spec = s; floorRotors.push(r); return r;
     };
     const h1 = mk(F.h1), h2 = mk(F.h2), h3 = mk(F.h3);

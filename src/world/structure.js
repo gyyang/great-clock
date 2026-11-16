@@ -23,9 +23,11 @@
 //
 // designLoop() declares all of that to the structural model, runs the analysis, enlarges
 // whatever is overworked and repeats until everything holds. Only then is it drawn.
+import * as THREE from 'three';
 import { G, ibox, icyl, iknob, sbox, beam, sbeam, tube } from '../kit.js';
 import { TOWER, ARBOR, SHAFT, ROOF, PEND, DIAL } from '../layout.js';
 import { assembly, redeclare, analyse, report, SECTION, MATERIAL, GRAVITY } from '../structure/model.js';
+import { ENVELOPES } from '../clock/clockwork.js';
 
 export const EDGES = [];            // edges of crossings that want hanging: { name, y, yc, z }, filled by tower.js
 const ALLOY = MATERIAL.alloy, TENDON = MATERIAL.tendon;
@@ -37,7 +39,7 @@ const boxOf = (h) => SECTION.box(h, Math.min(0.7 * h, DEPTH), h / 12);
 // a leg piece: h deep in the plane of its frame (set by the analysis), w thick across it (set by what it must pass between)
 const legOf = (h, w) => SECTION.box(h, w, Math.min(Math.max(h / 10, 0.06), 0.499 * Math.min(h, w)));
 
-let towers = [], hung = [], sizes = new Map(), passes = 0, plinths = [];
+let towers = [], hung = [], sizes = new Map(), passes = 0, feet = [], solids = [], bearings = [];
 
 // ---- geometry of two segments: how near they come
 function gap(p1, q1, p2, q2) {
@@ -64,14 +66,33 @@ export function buildStructure() {
   // Would a member from a to b, h deep in its own plane and w thick, foul anything that is
   // already there? Rays down its middle and well outside its edges (a tooth that is clear now
   // will not be in a minute), and the places nothing may stand.
+  let self = null;                                    // the arbor whose tower is being planned: its legs end under it
   const fouls = (a, b, h, w) => {
     const d = b.map((v, i) => v - a[i]), L = Math.hypot(...d), along = Math.abs(d[2]) / L > 0.3;
     const p = along ? [1, 0, 0] : [-d[1] / L, d[0] / L, 0], q = along ? [0, 1, 0] : [0, 0, 1];
     for (const [op, oq] of [[0, 0], [h / 2 + 0.7, 0], [-h / 2 - 0.7, 0], [0, w / 2 + 0.1], [0, -w / 2 - 0.1]])
       if (ray(a.map((v, i) => v + p[i] * op + q[i] * oq), b.map((v, i) => v + p[i] * op + q[i] * oq))) return true;
+    // and a box the size of the member itself, for things too thin for a ray to find (a handrail)
+    if (L > 1.2) {
+      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), new THREE.Vector3(d[0] / L, d[1] / L, d[2] / L));
+      if (G.world.intersectionWithShape({ x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, z: (a[2] + b[2]) / 2 }, q, new R.Cuboid(L / 2 - 0.5, (along ? Math.max(h, w) : h) / 2 + 0.1, (along ? Math.max(h, w) : w) / 2 + 0.1), undefined, undefined, G.ground)) return true;
+    }
     for (let k = 0; k <= 12; k++) if (forbidden(a.map((v, i) => v + d[i] * k / 12))) return true;
+    // what the turning parts sweep, wherever their teeth are now
+    const n = Math.max(2, Math.ceil(L / 0.7)), thick = (along ? Math.max(h, w) : w) / 2, deep = (along ? Math.max(h, w) : h) / 2;
+    for (let k = 0; k <= n; k++) {
+      const pt = a.map((v, i) => v + d[i] * k / n);
+      for (const e of ENVELOPES) {
+        if (self && !e.floor && e.r < 2.5 && e.x === self.x && e.y === self.y) continue;
+        if (e.floor ? pt[1] - deep < e.top + 0.2 && Math.hypot(pt[0] - e.x, pt[2] - e.z) < e.r + Math.max(deep, thick) + 0.5
+          : pt[2] + thick + 0.15 > e.z0 && pt[2] - thick - 0.15 < e.z1 && Math.hypot(pt[0] - e.x, pt[1] - e.y) < e.r + deep + 0.3) return true;
+      }
+    }
     return false;
   };
+  // Is there room on the floor for a leg to stand here, on a pedestal, with space to get round it?
+  const standing = (p) => !G.world.intersectionWithShape({ x: p[0], y: 2.0, z: p[2] }, { x: 0, y: 0, z: 0, w: 1 }, new R.Cuboid(3.2, 1.6, 2.0), undefined, undefined, G.ground)
+    && !ENVELOPES.some(e => e.floor && Math.hypot(p[0] - e.x, p[2] - e.z) < e.r + 3.5);
   // A strut from one frame to the other must also miss the frames of every other tower,
   // which are planned but not yet built (their legs taken as 3 m deep).
   const strutFouls = (a, b, owner) => fouls(a, b, 0.5, 0.5) || placed.some(m => m.owner !== owner && gap(a, b, m.a, m.b) < 0.25 + (m.strut ? 0.25 : 1.5) + 0.2);
@@ -82,12 +103,15 @@ export function buildStructure() {
   towers = [];
   for (const [name, sh] of Object.entries(SHAFT)) {
     const a = ARBOR[name], A = assembly(`arbor ${name}`), [z1, z2] = sh.bearings, yh = a.y - sh.r - 0.6;
+    self = a;
     let W = Math.PI * sh.r ** 2 * (sh.z[1] - sh.z[0]) * ALLOY.rho, M = W * ((sh.z[0] + sh.z[1]) / 2 - z1);
     for (const q of A.masses) { W += q.kg; M += q.kg * (A.nodes[q.n].p[2] - z1); }
     const R2 = M / (z2 - z1), loads = [(W - R2) * GRAVITY, R2 * GRAVITY];
     // how far each leg can splay: as near one in five as will clear everything, in both frames
-    const frac = [0.2, 0.16, 0.24, 0.12, 0.28, 0.08, 0.05, 0.03], H = (z) => [a.x, yh, z], foot = (side, sp, z) => [a.x + side * sp * yh, FOOT, z];
-    const splay = (side) => frac.find(sp => sh.bearings.every(z => !fouls(H(z), foot(side, sp, z), 1.6, DEPTH))) ?? 0.02;
+    // (a negative splay leans the leg the other way: both feet then stand on the same side of the arbor, when the other side is taken)
+    const frac = [0.2, 0.16, 0.24, 0.12, 0.28, 0.08, 0.05, 0.03, -0.03, -0.06, -0.1, -0.14], H = (z) => [a.x, yh, z], foot = (side, sp, z) => [a.x + side * sp * yh, FOOT, z];
+    const splay = (side) => frac.find(sp => sh.bearings.every(z => standing(foot(side, sp, z)) && !fouls(H(z), foot(side, sp, z), 1.6, DEPTH)))
+      ?? frac.find(sp => sh.bearings.every(z => !fouls(H(z), foot(side, sp, z), 1.6, DEPTH))) ?? 0.02;
     const s = { '-1': splay(-1), '1': splay(1) }, levels = [], half = [];
     for (let y = BAY; y < yh - BAY / 2; y += BAY) levels.push(y);
     for (let y = BAY / 2; y < yh - 3; y += BAY / 2) half.push(y);                    // struts front to back are tried twice as often as ties
@@ -123,6 +147,7 @@ export function buildStructure() {
     for (const m of T.struts) placed.push({ a: m[0], b: m[1], owner: name, strut: true });
     towers.push(T);
   }
+  self = null;
   // ---- 2. the walkways' rods to the roof, wherever a line straight up is clear
   hung = [];
   for (const e of EDGES) for (const x of ROOF.purlins) {
@@ -187,6 +212,7 @@ const WALL_T = TOWER.wall + 0.3;                      // frame members are a lit
 const LEVELS = [30, 60, 90, 120, 150, 180, ROOF.eaves, TOWER.H], RING = DIAL.r + 1.2;
 const BRICK_PER_M2 = TOWER.wall * MATERIAL.brick.rho * GRAVITY;       // weight of a square metre of wall face, N
 const WIND = 1500;                                    // N/m2 on the back wall, blowing toward the dial
+const CROWN_PER_M = 5.0e5;                            // N per metre of wall head: the attic, copper roof, lantern and spire (about 23,000 t in all)
 
 function declareShell(out) {
   const cx = TOWER.hx + TOWER.wall / 2, cz = TOWER.hz + TOWER.wall / 2, H = TOWER.H;
@@ -204,7 +230,9 @@ function declareShell(out) {
     const P = (c, y) => W.along === 'x' ? [c, y, W.at] : [W.at, y, c];
     const wc = size(`${W.name}|column`, 1.0), hs = size(`${W.name}|girder`, 1.2), tc = clamp(wc / 12, 0.05, 0.25);
     const colSec = W.along === 'x' ? SECTION.box(wc, WALL_T, tc) : SECTION.box(WALL_T, wc, tc), girSec = SECTION.box(hs, WALL_T, clamp(hs / 14, 0.04, 0.2));
-    const draw = (a, b, h, w, label) => { if (out) out.push({ a, b, h, w, label }); };
+    // drawn a hand's breadth inside the wall's centre line, so the frame shows indoors and the stone hides it outdoors
+    const inward = (p) => W.along === 'x' ? [p[0], p[1], p[2] - Math.sign(W.at) * 0.2] : [p[0] - Math.sign(W.at) * 0.2, p[1], p[2]];
+    const draw = (a, b, h, w, label) => { if (out) out.push({ a: inward(a), b: inward(b), h, w, label }); };
     const inDial = (c, y) => W.dial && Math.hypot(c - DIAL.x, y - DIAL.y) < RING, chord = (d) => Math.sqrt(Math.max(0, RING * RING - d * d));
     const ringPts = [];
     // columns, from the ground to the top; the ones under the dial stop at its ring and start again above it
@@ -218,7 +246,7 @@ function declareShell(out) {
     // girders at each level, bay by bay; each carries the brick panel standing on it
     const stops = W.ends ? [W.ends[0], ...W.lines, W.ends[1]] : W.lines;
     LEVELS.forEach((y, k) => {
-      const panel = k < LEVELS.length - 1 ? (LEVELS[k + 1] - y) * BRICK_PER_M2 : 0;
+      const panel = k < LEVELS.length - 1 ? (LEVELS[k + 1] - y) * BRICK_PER_M2 : CROWN_PER_M;      // the top girder carries the crown instead
       for (let i = 0; i < stops.length - 1; i++) {
         let a = stops[i], b = stops[i + 1];
         if (inDial(a, y) && inDial(b, y)) continue;
@@ -285,31 +313,36 @@ function designLoop() {
     }
     if (!grew) break;
   }
-  // each leg's plinth: big enough that the stone, and the ground under it, are not crushed
-  // (no thicker front to back than the gap it stands in allows, so longer across the hall instead)
-  plinths = res.terminal.ground.filter(t => t.from.startsWith('tower')).map(t => { const F = Math.abs(t.f[1]), area = Math.max(2, F / MATERIAL.stone.fc), dz = Math.min(3.2, Math.sqrt(area)); return { p: t.p, dz, dx: area / dz, load: F }; });
+  feet = res.terminal.ground.filter(t => t.from.startsWith('tower')).map(t => ({ p: t.p, load: Math.abs(t.f[1]), tower: t.from }));
 }
 
 function draw() {
   const out = [];
   declare(out);
-  for (const m of out) (m.label === 'leg' || m.label === 'tie beam' || m.label === 'brace' || m.label === 'strut' ? sbeam : beam)('iron', m.a, m.b, m.h, m.w);
+  solids = []; bearings = [];
+  for (const m of out) {
+    if (m.label === 'leg' || m.label === 'tie beam' || m.label === 'brace' || m.label === 'strut') solids.push({ collider: sbeam('iron', m.a, m.b, m.h, m.w), what: m.label, at: m.a.map((v, i) => (v + m.b[i]) / 2) });
+    else beam('iron', m.a, m.b, m.h, m.w);
+  }
   for (const T of towers) {
     const hl = sizes.get(`${T.name}|leg`), { a, r } = T;
     for (const m of [...T.ties, ...T.braces]) for (const p of m) ibox('iron', hl * 1.5, hl * 1.5, DEPTH + 0.08, p[0], p[1], p[2]);     // gusset plates at the joints
     for (const z of T.planes) {
       ibox('iron', 2 * r + 3.2, 0.5, DEPTH + 0.5, a.x, T.yh - 0.1, z);                                                // head casting the two legs meet under
       // pillow block: iron housing, bronze bearing shell
-      sbox('iron', r * 2 + 2.4, 0.5, 1.4, a.x, a.y - r - 0.45, z);
-      sbox('iron', r * 2 + 1.2, r * 2 + 0.7, 1.15, a.x, a.y - 0.1, z);
+      bearings.push(sbox('iron', r * 2 + 2.4, 0.5, 1.4, a.x, a.y - r - 0.45, z), sbox('iron', r * 2 + 1.2, r * 2 + 0.7, 1.15, a.x, a.y - 0.1, z));
       icyl('bronze', r + 0.3, 1.3, a.x, a.y, z, { x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 });
       for (const dx of [-(r + 0.9), r + 0.9]) icyl('steel', 0.2, 0.5, a.x + dx, a.y - r - 0.1, z);
     }
   }
-  for (const f of plinths) {                                                                                           // stone plinth, steel base plate, holding-down bolts
-    sbox('stone', f.dx, FOOT, f.dz, f.p[0], FOOT / 2, f.p[2]);
-    ibox('iron', f.dx * 0.7, 0.08, f.dz * 0.7, f.p[0], FOOT + 0.04, f.p[2]);
-    for (const sx of [-1, 1]) for (const sz of [-1, 1]) iknob('steel', 0.07, f.p[0] + sx * f.dx * 0.3, FOOT + 0.1, f.p[2] + sz * f.dz * 0.3);
+  // Each leg stands on a pedestal no bigger than its own foot needs. The foundation proper is
+  // under the floor: one raft beneath the whole building (checked in structuralCheck).
+  for (const f of feet) {
+    const T = towers.find(t => t.name === f.tower), hl = sizes.get(`${T.name}|leg`), piece = T.legs.find(l => Math.hypot(l[0][0] - f.p[0], l[0][2] - f.p[2]) < 0.1);
+    const dx = hl + 1.0, dz = (piece ? piece[3] : DEPTH) + 0.5;
+    solids.push({ collider: sbox('stone', dx, FOOT, dz, f.p[0], FOOT / 2, f.p[2]), what: 'pedestal', at: f.p });
+    ibox('iron', dx - 0.4, 0.08, dz - 0.2, f.p[0], FOOT + 0.04, f.p[2]);
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) iknob('steel', 0.07, f.p[0] + sx * (dx / 2 - 0.35), FOOT + 0.1, f.p[2] + sz * (dz / 2 - 0.2));
   }
   for (const h of hung) {
     tube('tendon', [h.x, h.e.y, h.e.z], [h.x, ROOF.at(h.x) + 0.4, h.e.z], 0.03);
@@ -321,9 +354,25 @@ function draw() {
 // not frames: the ground under the plinths, and the shell. Returns { ok, rows, text }.
 export function structuralCheck() {
   const res = analyse(), extra = [], MPa = (v) => (v / 1e6).toFixed(1);
-  const worstFoot = plinths.reduce((m, f) => Math.max(m, f.load / (f.dx * f.dz)), 0);
-  extra.push({ name: 'ground: under the plinths', ok: worstFoot <= MATERIAL.stone.fc * 1.01,
-    verdict: `worst ${MPa(worstFoot)} MPa on stone good for ${MPa(MATERIAL.stone.fc)}; ${plinths.length} plinths, the largest ${Math.max(...plinths.map(f => f.dx)).toFixed(1)} m long` });
+  // Interference: does any structural solid occupy the same space as something that is not
+  // structure (a wheel, an arbor, the engine, a walkway)? Structure touching structure is a joint.
+  const own = new Set([...solids.map(q => q.collider.handle), ...bearings.map(c => c.handle)]), clashes = [];        // (a leg ends under its bearing: that is a joint)
+  for (const q of solids) {
+    const c = q.collider;
+    G.world.intersectionsWithShape(c.translation(), c.rotation(), c.shape, (o) => {
+      const body = o.parent();
+      if (own.has(o.handle) || o.handle === G.ground?.handle || (body && body.isDynamic())) return true;
+      const t = o.translation(), part = G.parts.get(o.handle);
+      clashes.push(`${q.what} at (${q.at.map(v => v.toFixed(0)).join(', ')}) against ${part ? 'a moving part' : 'something fixed'} at (${[t.x, t.y, t.z].map(v => v.toFixed(0)).join(', ')})`);
+      return false;
+    }, undefined, undefined, c);
+  }
+  extra.push({ name: 'clearance: structure against everything else', ok: clashes.length === 0,
+    verdict: clashes.length ? `${clashes.length} of ${solids.length} solids overlap something: ${clashes.slice(0, 6).join('; ')}${clashes.length > 6 ? '; ...' : ''}` : `${solids.length} solids, none overlapping a wheel, an arbor, a walkway or the engine (as they stand now)` });
+  // The ground: one raft under the whole building, on rock.
+  const total = res.terminal.ground.reduce((sum, t) => sum - t.f[1], 0), area = (2 * (TOWER.hx + TOWER.wall)) * (2 * (TOWER.hz + TOWER.wall)), rock = 1.0e6;
+  extra.push({ name: 'ground: under the raft', ok: total / area <= rock,
+    verdict: `${Math.round(total / GRAVITY / 1000).toLocaleString('en')} t on ${Math.round(area).toLocaleString('en')} m2 = ${MPa(total / area)} MPa against ${MPa(rock)} for sound rock (average; the towers' feet need thickening under them)` });
   // The brick: each panel stands on its own girder, 30 m of it, and spans that 30 m against the wind.
   const brick = MATERIAL.brick, panel = 30, foot = brick.rho * GRAVITY * panel;
   extra.push({ name: 'shell: a brick panel, crushing', ok: foot <= brick.fc,
@@ -331,5 +380,5 @@ export function structuralCheck() {
   const bend = WIND * panel ** 2 / 8 / (TOWER.wall ** 2 / 6);                                        // a 1 m strip spanning from girder to girder
   extra.push({ name: 'shell: a brick panel, in the wind', ok: bend <= foot / 2,
     verdict: `${MPa(bend)} MPa of bending in a strip spanning ${panel} m between girders, against ${MPa(foot / 2)} of its own weight holding it shut` });
-  return { ok: res.ok && extra.every(e => e.ok), rows: res.rows, extra, terminal: res.terminal, text: report(res, extra) };
+  return { ok: res.ok && extra.every(e => e.ok), clashes, rows: res.rows, extra, terminal: res.terminal, text: report(res, extra) };
 }
