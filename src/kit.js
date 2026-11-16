@@ -3,9 +3,11 @@
 // the tower its human scale.
 import * as THREE from 'three';
 import { initSurfaces } from './surface/generate.js';
-import { surface } from './surface/material.js';
+import { surface, keepVisible } from './surface/material.js';
 
-export const G = { scene: null, world: null, R: null, parts: new Map() };
+export const G = { scene: null, world: null, R: null, parts: new Map(),
+  machines: [], machineFixed: new Set(),
+  clear: [] };       // spaces that have to stay empty: { name, lo, hi }. A doorway, the headroom over a walkway. Nothing is there to collide with, so they are listed.       // every group of moving machinery, and the fixed colliders that stand for shafts turning in place: what the clearance check walks
 export const MAT = {};
 export const TEX = {};
 export const QID = new THREE.Quaternion();
@@ -249,12 +251,18 @@ function makeMaterials() {
   MAT.lattice = S({ map: TEX.lattice, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.5, metalness: 0.8 });
   MAT.turntable = S({ map: TEX.turntable, metalness: 0.9, roughness: 0.5, normalMap: TEX.micro, normalScale: v2(0.3) });
   MAT.slate = S({ color: 0x25282d, roughness: 0.8, metalness: 0.2 });
+  MAT.coal = S({ color: 0x0e0f11, roughness: 0.55, metalness: 0.25 });                                    // the yard's coal heap, and the boiler's ash
+  MAT.ash = S({ color: 0x77726b, roughness: 1.0, metalness: 0.0 });
+  MAT.coal.userData.outdoor = MAT.ash.userData.outdoor = true;
   MAT.ground = surface('stone', { color: 0x7d766c, macro: [0.16, 0.06, 0.05, 0.3] });      // the streets and the square: stone setts
   MAT.city = S({ map: TEX.facade, emissive: 0xffffff, emissiveMap: TEX.facadeLit, emissiveIntensity: 1.1, roughness: 0.95 });
   MAT.dial = S({ color: 0x6a5f4c, map: TEX.dial, emissive: 0xffffff, emissiveMap: TEX.dial, emissiveIntensity: 1.0, roughness: 0.45, side: THREE.DoubleSide });
   MAT.shadow = new THREE.MeshBasicMaterial({ color: 0x150f09, transparent: true, opacity: 0.72, side: THREE.DoubleSide });
   MAT.bulb = new THREE.MeshBasicMaterial({ color: new THREE.Color(3.4, 1.8, 0.62), fog: false });
   MAT.window = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.5, 0.85, 0.35) });
+  // window glass: you see through it to what is behind (a real room, a real stair), with a little of the sky in it
+  MAT.glazing = S({ color: 0x9fb4bd, roughness: 0.05, metalness: 0.6, transparent: true, opacity: 0.28, depthWrite: false });
+  MAT.glazing.userData.outdoor = true;
   MAT.fire = new THREE.MeshBasicMaterial({ color: new THREE.Color(4, 1.1, 0.25) });
 }
 
@@ -329,10 +337,15 @@ const UNIT = {
   knob: new THREE.IcosahedronGeometry(1, 1),
   stud: new THREE.IcosahedronGeometry(1, 0),
   cone: new THREE.ConeGeometry(1, 1, 12),
+  // masonry for the outside of the tower, each in a unit cube: the head of a blind lancet (a slab with a
+  // pointed arch cut up into it), a pyramid on a square base, and a gable
+  arch: (() => { const s = new THREE.Shape(); s.moveTo(-0.5, -0.5); s.lineTo(-0.4, -0.5); s.quadraticCurveTo(-0.4, 0.05, 0, 0.36); s.quadraticCurveTo(0.4, 0.05, 0.4, -0.5); s.lineTo(0.5, -0.5); s.lineTo(0.5, 0.5); s.lineTo(-0.5, 0.5); return new THREE.ExtrudeGeometry(s, { depth: 1, bevelEnabled: false, curveSegments: 7 }).translate(0, 0, -0.5); })(),
+  pyr: (() => { const g = new THREE.ConeGeometry(Math.SQRT1_2, 1, 4).rotateY(Math.PI / 4).toNonIndexed(); g.computeVertexNormals(); return g; })(),
+  wedge: (() => { const s = new THREE.Shape(); s.moveTo(-0.5, -0.5); s.lineTo(0.5, -0.5); s.lineTo(0, 0.5); return new THREE.ExtrudeGeometry(s, { depth: 1, bevelEnabled: false }).translate(0, 0, -0.5); })(),
   tread: treadGeo(),
 };
 const batches = new Map();
-// Every instanced part of any size, as an oriented box: { c: centre, q: rotation, half: half-sizes, tag }.
+// Every instanced part of any size, as an oriented box: { c: centre, q: rotation, half: half-sizes, tag, kind, mat }.
 // Most of what is drawn has no collider (posts, brackets, beams, lamp standards), so anything that
 // has to keep clear of the building looks here, not only in the physics world. G.tag marks who drew it.
 export const DRAWN = [];
@@ -347,16 +360,18 @@ function push(kind, mat, sx, sy, sz, x, y, z, q) {
   _q.copy(q || QID).multiply(_qj.setFromEuler(_ej.set(wob() * tilt, wob() * tilt, wob() * tilt)));
   b.list.push(new THREE.Matrix4().compose(_p.set(x + wob() * 0.003, y + wob() * 0.002, z + wob() * 0.003), _q, _s.set(sx, sy, sz)));
   const half = kind === 'box' || kind === 'tread' ? [sx / 2, sy / 2, sz / 2] : kind === 'cyl' || kind === 'rod' || kind === 'cone' ? [sx, sy / 2, sz] : kind === 'tube' ? [sx / 2, sy, sz] : [sx, sy, sz];
-  if (Math.max(half[0], half[1], half[2]) > 0.12) DRAWN.push({ c: [x, y, z], q: _q.clone(), half, tag: G.tag || '' });
+  if (Math.max(half[0], half[1], half[2]) > 0.12) DRAWN.push({ c: [x, y, z], q: _q.clone(), half, tag: G.tag || '', on: G.on || '', kind, mat });        // (kind and material, so that what is drawn can be weighed)
 }
 export const ibox = (mat, sx, sy, sz, x, y, z, q) => push('box', mat, sx, sy, sz, x, y, z, q);
 export const icyl = (mat, r, h, x, y, z, q) => push('cyl', mat, r, h, r, x, y, z, q);
 export const isph = (mat, r, x, y, z) => push('sph', mat, r, r, r, x, y, z);
 const irod = (mat, r, h, x, y, z) => push('rod', mat, r, h, r, x, y, z);        // vertical, centred on y
 export const iknob = (mat, r, x, y, z) => push('knob', mat, r, r, r, x, y, z);
+export const ipart = (kind, mat, sx, sy, sz, x, y, z, q) => push(kind, mat, sx, sy, sz, x, y, z, q);      // any of the unit shapes above
 
 export function flushBatches() {
   for (const b of batches.values()) {
+    keepVisible(MAT[b.mat]);
     const im = new THREE.InstancedMesh(b.geo, MAT[b.mat], b.list.length);
     b.list.forEach((m, i) => im.setMatrixAt(i, m));
     im.instanceMatrix.needsUpdate = true;
@@ -403,6 +418,9 @@ export function deck(x0, x1, z0, z1, y) {
   const sx = x1 - x0, sz = z1 - z0, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
   tplane(MAT.grate, x0, x1, z0, z1, y, 1);
   cbox(sx, 0.3, sz, cx, y - 0.15, cz);
+  // (the rails stand on its edges, and a rising main may stand in a corner: the middle is what has to be clear)
+  const ex = sx >= sz ? 2.2 : 0.6, ez = sx >= sz ? 0.6 : 2.2;
+  if (sx > 2 * ex + 0.4 && sz > 2 * ez + 0.4) G.clear.push({ name: 'the headroom over a walkway', lo: [x0 + ex, y + 0.2, z0 + ez], hi: [x1 - ex, y + 2.0, z1 - ez] });
   if (sx >= sz) {
     ibox('iron', sx, 0.42, 0.18, cx, y - 0.23, z0 + 0.09); ibox('iron', sx, 0.42, 0.18, cx, y - 0.23, z1 - 0.09);
     const n = Math.max(1, Math.round(sx / 3));

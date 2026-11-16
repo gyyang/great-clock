@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { G, MAT, QX, ibox, icyl, isph, cbox, tbox, lamp, cagePanel } from '../kit.js';
 import { boltCircle } from '../clock/gears.js';
-import { ENGINE as E, FLOOR, TOWER, DEG } from '../layout.js';
+import { ENGINE as E, FLOOR, TOWER, DEG , CRANK, STACK } from '../layout.js';
 
 const Q_ALONG_Z = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0));   // unit cylinders stand on y
 const Q_ALONG_X = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 2));
@@ -50,15 +50,18 @@ export function buildEngineModel(h3) {
 
   // ---- crank, on the flywheel shaft (h3's own frame: z is up, origin at the pinion's centre)
   {
-    const up = (y) => y - h3.center.y, g = h3.group;
-    add(g, zCyl(1.45, 0.25, 40), MAT.bronze, 0, 0, up(4.33));
-    add(g, box(E.crank + 1.7, 1.0, 0.25), MAT.steel, (E.crank - 0.9) / 2, 0, up(4.33));
-    add(g, box(1.3, 2.0, 0.25), MAT.bronze, -1.7, 0, up(4.33));                              // counterweight
-    add(g, zCyl(0.26, 0.62, 20), MAT.steel, E.crank, 0, up(4.14));                           // crank pin
-    const C = G.R.ColliderDesc;
-    h3.addCollider(C.cuboid((E.crank + 1.7) / 2, 0.5, 0.125).setTranslation((E.crank - 0.9) / 2, 0, up(4.33)));
-    h3.addCollider(C.cuboid(0.65, 1.0, 0.125).setTranslation(-1.7, 0, up(4.33)));
-    h3.addCollider(C.cylinder(0.31, 0.26).setRotation(QX).setTranslation(E.crank, 0, up(4.14)));
+    const up = (y) => y - h3.center.y, g = h3.group, C = G.R.ColliderDesc;
+    // a cranked shaft: a web below the rod and a web above it, each with its counterweight, and the pin between
+    for (const y of [CRANK.lower, CRANK.upper]) {
+      add(g, zCyl(1.45, 0.25, 40), MAT.bronze, 0, 0, up(y));
+      add(g, box(E.crank + 1.7, 1.0, 0.25), MAT.steel, (E.crank - 0.9) / 2, 0, up(y));
+      add(g, box(1.3, 2.0, 0.25), MAT.bronze, -1.7, 0, up(y));                               // counterweight
+      h3.addCollider(C.cuboid((E.crank + 1.7) / 2, 0.5, 0.125).setTranslation((E.crank - 0.9) / 2, 0, up(y)));
+      h3.addCollider(C.cuboid(0.65, 1.0, 0.125).setTranslation(-1.7, 0, up(y)));
+    }
+    const pin = CRANK.upper - CRANK.lower + 0.25;
+    add(g, zCyl(0.26, pin, 20), MAT.steel, E.crank, 0, up((CRANK.lower + CRANK.upper) / 2));     // crank pin
+    h3.addCollider(C.cylinder(pin / 2, 0.26).setRotation(QX).setTranslation(E.crank, 0, up((CRANK.lower + CRANK.upper) / 2)));
   }
 
   // ---- bed, guards and guide bars
@@ -66,7 +69,7 @@ export function buildEngineModel(h3) {
     const len = E.bedS1 - E.bedS0, zc = at((E.bedS0 + E.bedS1) / 2);
     tbox(MAT.brick, 2 * E.bedHalf, E.bedTop - 0.2, len, O.x, (E.bedTop - 0.2) / 2, zc);
     ibox('iron', 2 * E.bedHalf + 0.2, 0.2, len + 0.2, O.x, E.bedTop - 0.1, zc);
-    cbox(3, 3, len, O.x, E.bedTop + 1.5, zc);                                                // the machinery itself
+    G.machineFixed.add(cbox(3, 3, len, O.x, E.bedTop + 1.5, zc).handle);                     // the machinery itself, moving parts and all, as one solid to walk into
     cagePanel(O.x - 1.5, O.x + 1.5, E.bedTop, 3.7, at(E.bedS0 + 0.05), at(E.bedS0 + 0.05));
     for (const sx of [-1, 1]) cagePanel(O.x + sx * 1.5, O.x + sx * 1.5, E.bedTop, 3.7, at(10.6), at(E.bedS0));
     for (const sy of [-1, 1]) ibox('steel', 0.5, 0.14, 4.8, O.x, E.axisY + sy * 0.47, at(8.1));
@@ -129,7 +132,7 @@ export function buildEngineModel(h3) {
       ibox('iron', TOWER.hx - E.pipeWallX, 0.12, 0.12, (TOWER.hx + E.pipeWallX) / 2, E.pipeY - 0.36, z - 0.4);
     }
     const sx = O.x + E.stackX;
-    icyl('copper', 0.4, E.stackTop, sx, E.stackTop / 2, zCylc); icyl('bronze', 0.5, 0.3, sx, E.stackTop, zCylc);
+    icyl('copper', 0.4, E.stackTop, sx, E.stackTop / 2, zCylc); icyl('bronze', 0.5, 0.3, sx, E.stackTop, zCylc); icyl('copper', 0.45, 0.4, sx, E.stackTop + 0.2, zCylc);
     G.world.createCollider(G.R.ColliderDesc.cylinder(E.stackTop / 2, 0.4).setTranslation(sx, E.stackTop / 2, zCylc));
     icyl('copper', 0.07, 0.9, O.x, E.pipeY + 0.9, zCylc); icyl('brass', 0.2, 0.7, O.x, E.pipeY + 1.6, zCylc); isph('brass', 0.2, O.x, E.pipeY + 1.95, zCylc);
     ibox('rail', Math.abs(E.standX), 0.05, 0.05, O.x + E.standX / 2, E.pipeY + 1.3, zCylc);            // whistle lever and its chain
@@ -159,7 +162,8 @@ export function buildEngineModel(h3) {
     slide, rod, rodBody, valveRod, gov, arms, links, sleeve, lever, setPressure, setSpeed,
     points: {
       centre: V(O.x, E.axisY, at(11)),
-      exhaust: V(O.x + E.stackX, E.stackTop + 0.2, zCylc),
+      exhaust: V(STACK.x, STACK.top + 1.5, STACK.z),                  // (the exhaust goes down under the floor into the flue, and out at the stack's top)
+      stackFoot: V(O.x + E.stackX, 0, zCylc),
       gland: V(O.x, E.axisY + 0.3, at(E.cylS - E.cylLen / 2 - 0.5)),
       drain: V(O.x + stackSide * 1.2, E.bedTop + 0.3, at(E.cylS + E.cylLen / 2)),
       whistle: V(O.x, E.pipeY + 1.3, zCylc),

@@ -1,17 +1,19 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { createEnv } from './world/env.js';
-import { initKit, flushBatches, MAT } from './kit.js';
+import { initKit, flushBatches, MAT, G, DRAWN } from './kit.js';
 import { buildTower } from './world/tower.js';
 import { buildStructure, structuralCheck } from './world/structure.js';
 import { buildCity } from './world/city.js';
 import { buildFacade } from './world/facade.js';
+import { buildDoors } from './world/doors.js';
+import { buildHoist } from './world/hoist.js';
 import { buildProps } from './world/props.js';
 import { buildClockwork } from './clock/clockwork.js';
 import { buildEngine } from './engine/engine.js';
 import { Player } from './player.js';
 import { Sound } from './audio.js';
-import { GRAV, BRIDGES, LEDGE, FLOOR, bobLanding } from './layout.js';
+import { GRAV, BRIDGES, FLOOR, bobLanding, LIFT, ARCH, LAMP } from './layout.js';
 
 const DT = 1 / 120;                       // fixed physics step
 const $ = (id) => document.getElementById(id);
@@ -27,9 +29,13 @@ async function main() {
   initKit(env.scene, world, RAPIER, env.renderer);
   buildTower();
   buildFacade();
+  const doors = buildDoors();
   const city = buildCity();
   const clock = buildClockwork();
+  const before = new Set(); world.colliders.forEach(c => before.add(c.handle));
   const engine = buildEngine(clock, env.scene);
+  world.colliders.forEach(c => { if (!before.has(c.handle)) G.machineFixed.add(c.handle); });       // the engine is machinery: its parts bear on one another by design
+  const hoist = buildHoist(engine);
   const structure = buildStructure();
   const props = buildProps(clock.floor);
   flushBatches();
@@ -45,11 +51,15 @@ async function main() {
   const SPOTS = [
     { name: 'The floor', p: [12, 0.95, -29], yaw: face(-0.45, 1), pitch: 0.22 },
     { name: 'The pendulum landing', p: [bl.x + 4.5, bl.y + 1.1, -10], yaw: face(-1, 0), pitch: 0.05 },
-    { name: 'The escapement', p: [10, BRIDGES.escapement.y + 0.95, -36.3], yaw: face(-0.3, 1), pitch: 0.24 },
+    { name: 'The escapement', p: [9.5, BRIDGES.escapement.y + 0.95, (BRIDGES.escapement.z0 + BRIDGES.escapement.z1) / 2], yaw: face(-1, 0.2), pitch: 0.1 },     // on the catwalk beside it
     { name: 'Between the wheels', p: [-34, BRIDGES.between.y + 0.95, 17.3], yaw: face(1, 0.05), pitch: 0.2 },
     { name: 'Behind the dial', p: [-38, BRIDGES.balcony.y + 0.95, 37.3], yaw: face(1, 0.3), pitch: 0.55 },
-    { name: 'The ledge', p: [-20, LEDGE.y + 0.95, 43.6], yaw: face(1, 0.25), pitch: 0.5 },
     { name: 'The engine', p: [FLOOR.h3.x + 9.5, 0.95, FLOOR.h3.z - 14.5], yaw: face(-1, 0.42), pitch: 0.22 },
+    { name: 'The winding gear', p: [-12, 0.95, 38], yaw: face(-0.75, -0.6), pitch: 0.25 },
+    { name: 'The square', p: [34, 0.95, 118], yaw: face(-0.4, -1), pitch: 0.78 },
+    { name: 'Across the river', p: [-190, 0.95, 420], yaw: face(0.5, -1), pitch: 0.42 },
+    { name: 'The attic', p: [-24, ARCH.cornice + 0.95, 36.2], yaw: face(0.55, 0.45), pitch: 0.12 },
+    { name: 'The lamp room', p: [-16, ARCH.flat + LAMP.drum + 0.95, 9], yaw: face(1, -0.55), pitch: 0.04 },
   ];
   const player = new Player(SPOTS[0]);
   const sound = new Sound();
@@ -62,8 +72,7 @@ async function main() {
   };
   clock.on('release', () => sound.release(near()));
   clock.on('impact', (n) => { const v = near() * (1 - outside * 0.5); sound.tock(n % 2 === 0, v); shake = Math.max(shake, 0.5 * v); if (player.grounded) player.dipV -= 0.3 * v; });
-  clock.on('hour', (h) => { sound.strike(h); engine.whistle(2.4); });
-  clock.on('half', () => sound.strike(1));
+  clock.on('hour', () => engine.whistle(2.4));        // the engine's whistle marks the hour. (There is no striking train yet, so nothing strikes.)
   // ---- the engine speaks
   let ventOpen = false;
   const engineVol = () => engine.loudness(player.position) * (1 - outside * 0.6);
@@ -71,6 +80,7 @@ async function main() {
   engine.on('vent', (open) => { ventOpen = open; });
   engine.on('whistle', (seconds) => sound.whistle(seconds, engineVol()));
   engine.on('regulator', () => sound.clunk(1));
+  hoist.on('bell', () => sound.clunk(0.7));         // the hand rope's catch, and the brake going on
   player.onStep = (s) => sound.step(s);
   player.onLand = (v) => { sound.land(v); shake = Math.max(shake, Math.min(1, v / 25)); };
 
@@ -104,8 +114,10 @@ async function main() {
     if (e.code === 'KeyM') say(sound.toggleMute() ? 'Muted' : 'Sound on');
     if (e.code === 'KeyQ') { autoQuality = false; say(['Detail: low', 'Detail: medium', 'Detail: high'][env.setQuality((env.quality + 2) % 3)]); }
     if (e.code === 'KeyL') say(env.toggleLantern() ? 'Lantern lit' : 'Lantern out');
-    if (e.code === 'KeyE') { const done = engine.use(player.position); if (done) say(done); }
-    if (/^Digit[1-7]$/.test(e.code)) go(+e.code.slice(5) - 1);
+    if (e.code === 'KeyE') { const done = engine.use(player.position) || hoist.use(player.position); if (done) say(done); }
+    if (/^Digit[1-9]$/.test(e.code)) go(+e.code.slice(5) - 1);
+    if (e.code === 'Digit0') go(9);
+    if (e.code === 'Minus') go(10);
   });
   window.addEventListener('keyup', (e) => player.keys.delete(e.code));
   window.addEventListener('blur', () => player.keys.clear());
@@ -121,9 +133,11 @@ async function main() {
     hudAlt.textContent = `${Math.max(0, player.feet).toFixed(0)} m up`;
     hudWhere.textContent = player.speed > 12 && !player.grounded ? `${(player.speed * 3.6).toFixed(0)} km/h` : (player.slip > 0.6 ? 'losing grip' : '');
     hudWhere.style.display = hudWhere.textContent ? '' : 'none';
-    hudEngine.textContent = engine.readout(player.position);
+    const run = engine.readout(player.position);
+    hudEngine.textContent = run && `${run} · weight ${clock.state.weightTop.toFixed(2)} m${clock.state.winding ? ', winding' : ''}`;
     hudEngine.style.display = hudEngine.textContent ? '' : 'none';
-    const h2 = engine.hint(player.position);
+    const pp = player.position, atLift = pp.x > LIFT.x0 - 1.5 && pp.x < LIFT.x1 + 1.5 && pp.z > LIFT.z0 - 2.6 && pp.z < LIFT.z1 + 2.6;
+    const h2 = engine.hint(player.position) || hoist.hint(player.position) || (atLift ? 'The lift never stops. Step on as a deck comes up to the floor (left side up, right side down); going down, step off just before your landing' : '');
     if (hint.textContent !== h2) hint.textContent = h2;
     hint.classList.toggle('show', !!h2);
   }
@@ -136,8 +150,10 @@ async function main() {
     while (acc >= DT && steps < 14) {
       clock.update(DT);
       engine.update(DT);
+      hoist.update(DT);
       props.step();
       player.step(DT);
+      doors.update(DT, player.position);
       world.step();
       acc -= DT; steps++;
     }
@@ -165,6 +181,7 @@ async function main() {
     }
     outside = env.update(dt, p);
     engine.frame(dt);
+    hoist.frame(dt);
     props.sync();
     sound.setWind(player.speed, outside);
     sound.setHiss(ventOpen ? engineVol() : 0);
@@ -179,13 +196,13 @@ async function main() {
   requestAnimationFrame(frame);
 
   // handy from the console
-  window.__game = { RAPIER, player, clock, engine, props, env, world, sound, go, SPOTS, city, structure, check: structuralCheck,
-    advance: (sec) => { for (let i = 0; i < sec / DT; i++) { clock.update(DT); engine.update(DT); props.step(); player.step(DT); world.step(); } }, look: (yaw, pitch) => { player.yaw = yaw; player.pitch = pitch; },
+  window.__game = { G, DRAWN, RAPIER, player, clock, engine, props, env, world, sound, go, SPOTS, city, structure, doors, hoist, check: structuralCheck,
+    advance: (sec) => { for (let i = 0; i < sec / DT; i++) { clock.update(DT); engine.update(DT); hoist.update(DT); props.step(); player.step(DT); doors.update(DT, player.position); world.step(); } hoist.frame(sec); }, look: (yaw, pitch) => { player.yaw = yaw; player.pitch = pitch; },
     // stand at p, look along (yaw, pitch) and draw one frame: for screenshots while the page is in the background
     shot: (p, yaw, pitch = 0) => {
       player.teleport(p, yaw, pitch); player.updateCamera(env.camera, 0.016);
       for (let i = 0; i < 40; i++) env.update(0.1, player.position);
-      engine.frame(0.016); props.sync(); env.render();
+      engine.frame(0.016); hoist.frame(0.016); props.sync(); env.render();
     } };
 }
 

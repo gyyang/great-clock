@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { createPost } from './post.js';
 import { TOWER, DIAL } from '../layout.js';
 import { MAT, TEX } from '../kit.js';
+import { PIXEL } from '../surface/material.js';
 
 const IN = { fog: new THREE.Color(0x1a130c), density: 0.0046, hemi: 0.42, fill: 0.3, key: 2.3, exposure: 1.2 };
 const OUT = { fog: new THREE.Color(0xc9925f), density: 0.0016, hemi: 0.7, sun: 1.9, exposure: 1.5 };   // (the grade's eye adaptation stops this down again)
@@ -57,7 +58,7 @@ export function createEnv(canvas) {
   renderer.shadowMap.type = THREE.PCFShadowMap;
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.12, 5000);
+  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.25, 5000);      // (a nearer near plane costs depth precision far away, where thin relief then stripes against the wall behind it)
   camera.rotation.order = 'YXZ';
   scene.fog = new THREE.FogExp2(IN.fog.getHex(), IN.density);
 
@@ -146,6 +147,7 @@ export function createEnv(canvas) {
   const { hx, hz, H, wall } = TOWER, fogCol = new THREE.Color();
   function update(dt, p) {
     time += dt;
+    PIXEL.value = 2 * Math.tan(camera.fov * Math.PI / 360) / renderer.domElement.height;
     if (!key.map && TEX.dial) { key.map = TEX.dial; post.shafts.setGlass(TEX.dial); }      // the light, and its shafts, take the colour of the glass they pass through
     const isOut = Math.abs(p.x) > hx + wall * 0.5 || p.z > hz + wall * 0.5 || p.z < -hz - wall * 0.5 || p.y > H + 1;
     outside += ((isOut ? 1 : 0) - outside) * Math.min(1, dt * 2.5);

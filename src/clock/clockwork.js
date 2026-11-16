@@ -1,11 +1,12 @@
-// The movement. A real pendulum is integrated every physics step; an anchor
-// escapement lets one tooth through per beat; the escape wheel's angle then
-// drives every other wheel, and finally the hands, through true gear ratios.
+// The movement. A real pendulum, hung from a suspension spring, is integrated every physics step. A gravity
+// escapement lets the escape wheel turn a sixth of a turn on each beat and gives the pendulum its impulse by the
+// fall of a weighted arm; the escape wheel's angle then drives every other wheel, and finally the hands, through
+// true gear ratios.
 import * as THREE from 'three';
-import { G, MAT, QX, ibox, icyl, sbox, deck, rail, stair, lamp } from '../kit.js';
+import { G, MAT, QX, ibox, icyl, sbox, beam, deck, rail, stair, lamp } from '../kit.js';
 import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
-import { spec, gearGeometry, escapeSpec, escapeOutline, extrude, planarUV, addGearColliders, addEscapeColliders, meshOffset, rivetRing, boltCircle } from './gears.js';
-import { DEG, GRAV, PEND, ESC, ARBOR, LAYER, DIAL, LEVELS, LIFT, FLOOR, TOWER , SHAFT } from '../layout.js';
+import { spec, gearGeometry, escapeSpec, escapeOutline, extrude, planarUV, addGearColliders, addEscapeColliders, meshOffset, rivetRing, boltCircle, NUT, bevelGeometry, wormGeometry, hubHalf } from './gears.js';
+import { DEG, GRAV, PEND, ESC, ARBOR, LAYER, DIAL, LEVELS, LIFT, FLOOR, TOWER, SHAFT, CRANK, WIND, GESC } from '../layout.js';
 import { assembly, SECTION, MATERIAL } from '../structure/model.js';
 import { wheelMass, cylinderMass } from '../structure/masses.js';
 
@@ -20,7 +21,7 @@ class Rotor {
     this.center = new THREE.Vector3(x, y, z);
     this.base = base ? base.clone() : new THREE.Quaternion();
     this.axis = ZAXIS.clone().applyQuaternion(this.base);
-    this.group = new THREE.Group(); this.group.position.copy(this.center); G.scene.add(this.group);
+    this.group = new THREE.Group(); this.group.position.copy(this.center); G.scene.add(this.group); G.machines.push(this.group);
     this.body = G.world.createRigidBody(G.R.RigidBodyDesc.kinematicPositionBased().setTranslation(x, y, z));
     this.q = new THREE.Quaternion(); this.angle = 0; this.omega = 0; this.k = 0; this.c = 0;
   }
@@ -37,13 +38,44 @@ class Mover {
   constructor(mesh, pos) {
     this.mesh = mesh; this.pos = pos.clone(); this.vel = new THREE.Vector3();
     this.body = G.world.createRigidBody(G.R.RigidBodyDesc.kinematicPositionBased().setTranslation(pos.x, pos.y, pos.z));
-    mesh.position.copy(pos); G.scene.add(mesh);
+    mesh.position.copy(pos); G.scene.add(mesh); G.machines.push(mesh);
   }
   addCollider(desc) { const col = G.world.createCollider(desc, this.body); G.parts.set(col.handle, this); return col; }
   set(p, dt) { this.vel.copy(p).sub(this.pos).divideScalar(dt); this.pos.copy(p); this.mesh.position.copy(p); this.body.setNextKinematicTranslation(p); }
   velAt(p, out) { return out.copy(this.vel); }
   angVelY() { return 0; }
 }
+
+// A shaft that only turns in place and carries nobody: no body of its own, just a fixed collider where it is.
+class Spinner {
+  constructor(p, axis) {
+    this.group = new THREE.Group(); this.group.position.copy(p); G.scene.add(this.group); G.machines.push(this.group);
+    this.base = new THREE.Quaternion().setFromUnitVectors(ZAXIS, axis); this.q = new THREE.Quaternion(); this.k = 0; this.c = 0;
+  }
+  set(angle) { this.group.quaternion.copy(this.base).multiply(this.q.setFromAxisAngle(ZAXIS, angle)); }
+}
+// Set shaft b's phase so that, where its bevel wheel meets a's, a tooth of one faces a gap of the other.
+// toA and toB point from where the two axes meet toward each wheel; pitchB is the angle between b's teeth.
+function meshBevels(a, toA, b, toB, pitchB) {
+  const where = (sh, v) => { const l = v.clone().applyQuaternion(sh.base.clone().invert()); return Math.atan2(l.y, l.x); };
+  const tau = (where(a, toB) - a.c) / a.k;                         // how far the drive has turned when a has a tooth on the line of contact
+  b.c = where(b, toA) + pitchB / 2 - b.k * tau;
+}
+const YUP = new THREE.Vector3(0, 1, 0);
+function solidCyl(p, q, r) {                                       // a fixed cylinder from p to q
+  const d = q.clone().sub(p), L = d.length(), rot = new THREE.Quaternion().setFromUnitVectors(YUP, d.clone().divideScalar(L)), m = p.clone().add(q).multiplyScalar(0.5);
+  const c = G.world.createCollider(G.R.ColliderDesc.cylinder(L / 2, r).setRotation({ x: rot.x, y: rot.y, z: rot.z, w: rot.w }).setTranslation(m.x, m.y, m.z));
+  G.machineFixed.add(c.handle); return c;
+}
+
+// Whether the driving weight can keep the clock going: filled in by buildClockwork, read by the structural check.
+export const POWER = {};
+
+// What the winding gear is and where, for the engineer who has to hold it up (world/structure.js).
+export const WINDGEAR = {};
+// The lift, for the clearance check: where a car is d metres round the loop (the point its deck hangs from), one car to
+// carry round, the colliders of all the cars, and of the four chain wheels (which only an axle may touch).
+export const LIFTGEAR = { wheels: new Set(), own: new Set(), car: null, at: null, loop: 0 };
 
 // What each turning part sweeps as it turns: a disc of its tip radius between two planes (wheels
 // and arbors on the going train), or a disc lying on the floor (the floor wheels). Anything fixed
@@ -56,19 +88,20 @@ function mountGear(rotor, s, z, mat) {
   ENVELOPES.push({ x: rotor.center.x, y: rotor.center.y, r: s.ra, z0: z - s.t / 2, z1: z + s.t / 2 });
   addGearColliders(rotor, s, z);
   if (s.spokes || s.recess) {
+    ENVELOPES.push({ x: rotor.center.x, y: rotor.center.y, r: s.hubR + 0.1, z0: z - hubHalf(s) + 0.1, z1: z + hubHalf(s) - 0.1 });      // its hub, which is thicker than its rim
     rivetRing(m, (s.rr + s.rimIn) / 2, Math.round(s.r * 3.2), s.t / 2);
-    boltCircle(m, s.hubR * 0.7, s.spokes ? 8 : 6, s.t * 0.64, Math.min(0.34, s.hubR * 0.1));
+    boltCircle(m, s.hubR * 0.7, s.spokes ? 8 : 6, hubHalf(s) - 0.12, Math.min(0.3, s.hubR * 0.09));      // set in counterbores, their heads nearly flush
   } else rivetRing(m, s.rr * 0.6, Math.max(8, Math.round(s.r * 2)), s.t / 2);
   return m;
 }
-function mountArbor(rotor, z0, z1, r) {
+function mountArbor(rotor, z0, z1, r, nuts = [true, true]) {
   ENVELOPES.push({ x: rotor.center.x, y: rotor.center.y, r: r * 1.35, z0: z0 - 0.3, z1: z1 + 0.3 });
   const g = new THREE.CylinderGeometry(r, r, z1 - z0, 28); g.rotateX(Math.PI / 2);
-  const m = new THREE.Mesh(g, MAT.steel); m.position.z = (z0 + z1) / 2; rotor.group.add(m);
+  const m = new THREE.Mesh(g, MAT.steel); m.position.z = (z0 + z1) / 2; m.userData.shaft = true; rotor.group.add(m);
   rotor.addCollider(G.R.ColliderDesc.cylinder((z1 - z0) / 2, r).setRotation(QX).setTranslation(0, 0, (z0 + z1) / 2));
-  for (const z of [z0, z1]) {
-    const cap = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.35, r * 1.35, 0.5, 8).rotateX(Math.PI / 2), MAT.bronze);
-    cap.position.z = z; rotor.group.add(cap);
+  for (const z of [z0, z1].filter((_, i) => nuts[i])) {                         // each end is held by a great nut on the arbor's own thread
+    const cap = new THREE.Mesh(NUT, MAT.bronze);
+    cap.scale.set(r * 1.2, r * 1.2, r * 0.7); cap.position.z = z; if (z === z0) cap.rotation.y = Math.PI; rotor.group.add(cap);
   }
 }
 function gbox(parent, mat, sx, sy, sz, x, y, z) {
@@ -96,17 +129,20 @@ function thickPath(pts, width) {
 // ------------------------------------------------------------------ build
 export function buildClockwork() {
   const R = G.R, listeners = { release: [], impact: [], hour: [], half: [] };
+  const spinners = [];                 // the shafts of the winding gear
   const emit = (name, arg) => listeners[name].forEach(fn => fn(arg));
 
   // ---- pendulum + anchor (one rigid piece, like a real crutch-coupled pair)
-  const pen = new Rotor(0, PEND.pivotY, 0);
+  const pen = new Rotor(0, PEND.pivotY, 0);       // turns about the middle of the suspension spring, where it bends
+  let spring;
   const pz = PEND.z, L = PEND.L, deckY = -(L - PEND.deckDrop);
   {
     const g = pen.group;
-    // gridiron rod: alternating steel and brass, as on a temperature-compensated pendulum
+    // The rod: five bars of invar, which hardly changes length with temperature, strapped together. (Bars of
+    // steel and brass side by side would compensate nothing: a gridiron needs nine, pinned alternately.)
     const rodLen = L - 9, rodY = -(1.5 + rodLen / 2);
     for (let i = -2; i <= 2; i++) {
-      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, rodLen, 20), i % 2 ? MAT.brass : MAT.steel);
+      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, rodLen, 20), MAT.steel);
       rod.position.set(i * 0.46, rodY, pz); g.add(rod);
     }
     for (let y = -4; y > -(L - 9); y -= 9.5) gbox(g, MAT.bronze, 2.5, 0.45, 0.6, 0, y, pz);
@@ -120,7 +156,6 @@ export function buildClockwork() {
     bob.position.set(0, -L, pz); g.add(bob);
     rivetRing(g, 5.2, 28, 1.3, 0.22).position.set(0, -L, pz);
     const nut = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 1.4, 8), MAT.bronze); nut.position.set(0, -L - PEND.bobR - 1, pz); g.add(nut);
-    gbox(g, MAT.iron, 3.4, 3.4, 2.2, 0, 0, pz);                                               // suspension block
     // riding deck on top of the bob
     const ex = PEND.deckHalfX, ez = PEND.deckHalfZ;
     gbox(g, MAT.plate, 2 * ex, 0.3, 2 * ez, 0, deckY - 0.15, pz);
@@ -135,99 +170,276 @@ export function buildClockwork() {
     pen.addCollider(R.ColliderDesc.cylinder(1.5, PEND.bobR).setRotation(QX).setTranslation(0, -L, pz));
     pen.addCollider(R.ColliderDesc.cylinder(0.7, 1.6).setTranslation(0, -L - PEND.bobR - 1, pz));       // rating nut: it skims the floor
 
-    // anchor: pallet tips sit on tangents from the pivot to the escape wheel's tip circle
-    const rp = ESC.R - 0.2, tx = rp * Math.sin(ESC.pallet), ty = -ESC.D + rp * Math.cos(ESC.pallet);
-    const path = [[-tx, ty], [-tx - 3.3, ty + 3.9], [-7.5, 1.2], [0, 2.4], [7.5, 1.2], [tx + 3.3, ty + 3.9], [tx, ty]];
-    const curve = new THREE.SplineCurve(path.map(p => new THREE.Vector2(p[0], p[1]))).getPoints(60).map(v => [v.x, v.y]);
-    const anchorGeo = toCreasedNormals(extrude(thickPath(curve, (u) => 0.72 + 0.55 * Math.sin(Math.PI * u)), 1.6, 0.12, 10, 2), 0.7);
-    const anchor = new THREE.Mesh(anchorGeo, MAT.steel); anchor.position.z = ESC.z; g.add(anchor);
-    const hub = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 2.0, 32).rotateX(Math.PI / 2), MAT.bronze); hub.position.z = ESC.z; g.add(hub);
-    for (let i = 0; i < path.length - 1; i++) {
-      const a = path[i], b = path[i + 1], len = Math.hypot(b[0] - a[0], b[1] - a[1]), ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
-      pen.addCollider(R.ColliderDesc.cuboid(len / 2, 0.8, 0.8).setTranslation((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, ESC.z)
-        .setRotation({ x: 0, y: 0, z: Math.sin(ang / 2), w: Math.cos(ang / 2) }));
-    }
-    mountArbor(pen, ...SHAFT.pivot.z, SHAFT.pivot.r);
+    // Suspension. The pendulum hangs from twelve leaves of spring steel, each 25 mm thick and 1.6 m wide, clamped
+    // above in the head beam and below in the chops at the head of the rod. It swings by bending them: there is no
+    // pivot to wear, and next to nothing is lost. They carry 3,760 t at 77 MPa. A strip clamped under tension bends
+    // sharply, just below the upper clamp, and the stress that adds is the swing times the root of 3 E times the
+    // tension: 360 MPa at 3 degrees. That, twice in every twenty seconds for ever, is why the swing is no wider.
+    spring = new THREE.Group(); g.add(spring);
+    for (let i = 0; i < 12; i++) gbox(spring, MAT.steel, 0.025, 1.0, 1.6, (i - 5.5) * 0.085, -0.25, pz).userData.shaft = true;       // (clamped in the chops, as a shaft is held in a bearing)
+    gbox(g, MAT.iron, 1.5, 0.7, 2.0, 0, -1.05, pz);                                             // the chops at the head of the rod
+    G.tag = 'bearing';
+    ibox('iron', 1.5, 0.7, 2.0, 0, PEND.pivotY + 0.6, pz);                                     // the chops in the head beam: the leaves bend a quarter of a metre below them, which is where the pendulum turns
+    ibox('iron', 1.6, 2.2, SHAFT.pivot.z[1] - SHAFT.pivot.z[0], 0, ARBOR.pivot.y, (SHAFT.pivot.z[0] + SHAFT.pivot.z[1]) / 2);       // the head beam, across the pendulum's tower
+    G.tag = '';
   }
 
   // ---- going train
   const S = {
-    esc: escapeSpec(ESC.R, ESC.N, ESC.depth, 2.2),
-    escP: spec(16, 0.9, 3.2), third: spec(48, 0.9, 2.5, { spokes: 6 }),
-    thirdP: spec(20, 1.1, 3.2, { spokes: 4 }), center: spec(40, 1.1, 2.5, { spokes: 6 }),
+    // The escape arbor turns once a minute and the centre arbor once an hour: 8 x 7.5 = 60. (The centres are those
+    // the arbors already stand on, 28.8 m and 33 m, so the pitches follow from the tooth counts.)
+    escP: spec(12, 28.8 / 54, 3.2), third: spec(96, 28.8 / 54, 2.5, { spokes: 6 }),
+    thirdP: spec(16, 33 / 68, 3.2), center: spec(120, 33 / 68, 2.5, { spokes: 8 }),
     centerP: spec(10, 0.8, 3.2), great: spec(80, 0.8, 2.5, { spokes: 8 }),
     cannon: spec(20, 0.5, 1.8), minuteW: spec(60, 0.5, 1.6, { spokes: 5 }),
     minuteP: spec(15, 8 / 15, 1.8), hourW: spec(60, 8 / 15, 1.6, { spokes: 6 }),
+    wind: spec(WIND.teeth, 2 * WIND.wheelR / WIND.teeth, 1.4, { spokes: 8, spokeW: 1.0, hubR: 2.5, rimIn: 6.9 }),
   };
   const rEsc = new Rotor(ARBOR.esc.x, ARBOR.esc.y, 0);
   const rThird = new Rotor(ARBOR.third.x, ARBOR.third.y, 0);
   const rCenter = new Rotor(ARBOR.center.x, ARBOR.center.y, 0);
   const rGreat = new Rotor(ARBOR.great.x, ARBOR.great.y, 0);
+  const rBarrel = new Rotor(ARBOR.great.x, ARBOR.great.y, 0);     // the great arbor, with the barrel fast on it: the great wheel rides loose and is driven through a ratchet
+  const rWind = new Rotor(ARBOR.great.x, ARBOR.great.y, 0);       // the winding wheel, loose on the same arbor
   const rMinute = new Rotor(ARBOR.minute.x, ARBOR.minute.y, 0);
   const rHour = new Rotor(ARBOR.center.x, ARBOR.center.y, 0);
+  const rE = new Rotor(ARBOR.esc.x, ARBOR.esc.y, 0);              // the escape wheel: light, and loose on a spigot on the end of the train's last arbor
 
+  // ---- remontoire and escapement
+  // The going train is far too heavy to stop and start every ten seconds, so it does not. It turns without
+  // stopping, and drives the escape wheel only through a remontoire: a differential on the end of its last arbor
+  // whose arm carries a small weight. The weight's pull on the arm is the only thing that ever turns the escape
+  // wheel, and it is always the same. Each time the escape wheel takes a step the arm drops; the train, coming on
+  // steadily behind, raises it again. The train's surplus goes into a brake (a copper disc turning between
+  // magnets), which the arm's height sets, so that the train keeps pace with the escapement.
+  //
+  // The escapement is a three-legged gravity escapement, in Denison's manner. On the escape wheel's sleeve are
+  // three legs and three lifting pins; beside the pendulum's suspension hang two arms. The wheel is locked with a
+  // leg lying against one arm's stop, and a pin holding that arm up. The pendulum, coming over, meets the arm's
+  // beat pin and carries the arm outward; the stop slides off the end of the leg and the wheel turns a sixth of
+  // a turn, until the next leg meets the other arm's stop. As it turns, a pin lifts that other arm. The first arm
+  // comes back resting on the pendulum and goes on down with it, past where it was picked up, until it is set
+  // down on a pin. So each arm pushes the pendulum through a little more than the pendulum pushed it, by a fixed
+  // drop, and that is the whole of the impulse.
+  const GE = GESC, Yp = PEND.pivotY + GE.pivotUp, G_LOW = GE.low, G_UP = GE.up, TH0 = PEND.theta0, STEP = 60 * DEG;
+  const Q = 6000;                                    // of this pendulum on its spring, in air: what it loses in a swing is its energy times pi / Q
+  const AIR = Math.sqrt(GRAV / L) / Q;
+  const pendKg = Math.PI * PEND.bobR ** 2 * 2.2 * MATERIAL.brass.rho + 5 * cylinderMass(0.17, PEND.L - 9);
+  // An arm's push on the pendulum, as an angular acceleration of the pendulum: what makes up, in the arm's fall
+  // from where it is picked up to where it is set down, exactly what the pendulum loses in a beat at the swing it
+  // is designed for. The arm is then made the weight that gives that push (armKg, below): that is how the swing
+  // of a gravity escapement is set, and it is the only place it is set.
+  const ARM = Math.PI * 0.5 * (GRAV / L) * TH0 * TH0 / (Q * (G_UP - G_LOW)), liftJ = ARM * pendKg * L * L * (G_UP - G_LOW);       // liftJ: joules to lift an arm
+  const REM = 3;                                     // the remontoire gives the escape wheel three times what lifting an arm takes
+  let armR, armL, armKg, spider, TURN;
+  const planets = [];
   {
-    const m = new THREE.Mesh(gearGeometry(S.esc, escapeOutline(S.esc)), MAT.brass); m.position.z = LAYER.esc; rEsc.group.add(m);
-    addEscapeColliders(rEsc, S.esc, LAYER.esc);
-    ENVELOPES.push({ x: rEsc.center.x, y: rEsc.center.y, r: S.esc.R, z0: LAYER.esc - S.esc.t / 2, z1: LAYER.esc + S.esc.t / 2 });
-    rivetRing(m, (S.esc.rr + S.esc.rimIn) / 2, 40, S.esc.t / 2);
-    boltCircle(m, S.esc.hubR * 0.7, 8, S.esc.t * 0.64, 0.26);
+    const st = MAT.steel, cyl = (r, len) => new THREE.CylinderGeometry(r, r, len, 28).rotateX(Math.PI / 2);
+    const on = (grp, mesh, x, y, z) => { mesh.position.set(x, y, z); grp.add(mesh); return mesh; };
+    // on the train's last arbor: the brake disc, a spigot for the rest to turn on, and one wheel of the differential
+    on(rEsc.group, new THREE.Mesh(cyl(4.0, 0.12), MAT.copper), 0, 0, GE.zBrake);
+    rEsc.addCollider(R.ColliderDesc.cylinder(0.06, 4.0).setRotation(QX).setTranslation(0, 0, GE.zBrake));
+    const spigot = on(rEsc.group, new THREE.Mesh(cyl(0.35, GE.zArm - 0.4 - SHAFT.esc.z[0]), st), 0, 0, (GE.zArm - 0.4 + SHAFT.esc.z[0]) / 2); spigot.userData.shaft = true;
+    const bevel = bevelGeometry(12, GE.bevelR, 0.28, Math.PI / 4, 0.42, 0.35);
+    on(rEsc.group, new THREE.Mesh(bevel, st), 0, 0, GE.zDiff).rotation.x = Math.PI;
+    ENVELOPES.push({ x: rEsc.center.x, y: rEsc.center.y, r: 4.1, z0: GE.zBrake - 0.3, z1: GE.zBrake + 0.3 }, { x: rEsc.center.x, y: rEsc.center.y, r: 5.4, z0: GE.zDiff - 0.5, z1: GE.zDiff + 0.5 });
+    G.tag = 'bearing';                                 // the magnets, either side of the disc's lower edge, on a bracket off the tower
+    for (const dz of [-0.3, 0.3]) ibox('iron', 1.8, 1.1, 0.26, 0, ESC.y - 3.5, GE.zBrake + dz);
+    ibox('iron', 0.4, 0.4, 1.6 - GE.zBrake + 0.5, 0, ESC.y - 4.25, (1.6 + GE.zBrake - 0.5) / 2);
+    G.tag = '';
+    // the remontoire's arm, with the two planet wheels of the differential on it and the weight at its end
+    spider = new Spinner(new THREE.Vector3(ARBOR.esc.x, ARBOR.esc.y, GE.zDiff), ZAXIS);
+    spider.group.add(new THREE.Mesh(cyl(0.5, 0.3), MAT.bronze));
+    for (const sg of [-1, 1]) { const pg = new THREE.Group(); pg.rotation.y = -sg * Math.PI / 2; const pm = new THREE.Mesh(bevel, st); pg.add(pm); spider.group.add(pg); planets.push(pm); }
+    gbox(spider.group, MAT.rail, 6.0, 0.22, 0.14, -1.6, 0, 0);                                   // the arm: the weight on the long end
+    const remKg = 2 * REM * liftJ / STEP / GRAV / 4.5;                                           // what must hang 4.5 m out to give the escape wheel its torque
+    on(spider.group, new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, Math.max(0.3, remKg / (8500 * Math.PI * 0.09)), 20), MAT.brass), -4.5, -0.45, 0);
+    // the escape wheel: three light legs and three lifting pins on a sleeve, and the other wheel of the differential
+    const legKg = 4.5 * 1.4 * 0.01 * 7850, escI = 3 * legKg * GE.legs ** 2 / 3 + 2500 * 0.3;     // legs of 10 mm plate, 400 x 300; the sleeve, hub and wheel as 2.5 t at 0.55 m
+    TURN = Math.sqrt(2 * STEP / (REM * liftJ / STEP / escI));                                    // seconds for a sixth of a turn, from rest, under the remontoire's torque alone
+    on(rE.group, new THREE.Mesh(bevel, st), 0, 0, GE.zDiff);
+    on(rE.group, new THREE.Mesh(cyl(0.5, GE.zDiff - GE.bevelR - GE.zArm + 0.3), MAT.bronze), 0, 0, (GE.zDiff - GE.bevelR + GE.zArm - 0.3) / 2);
+    for (let i = 0; i < 3; i++) {
+      const a = i * TAU / 3, c = Math.cos(a), sn = Math.sin(a), mid = (GE.legs + 0.6) / 2, len = GE.legs - 0.6;
+      const leg = gbox(rE.group, st, len, 0.4, 0.3, c * mid, sn * mid, GE.zWheel); leg.rotation.z = a; leg.name = 'leg';
+      rE.addCollider(R.ColliderDesc.cuboid(len / 2, 0.2, 0.15).setTranslation(c * mid, sn * mid, GE.zWheel).setRotation({ x: 0, y: 0, z: Math.sin(a / 2), w: Math.cos(a / 2) }));
+      on(rE.group, new THREE.Mesh(cyl(GE.pinR, 0.9), st), c * GE.pins, sn * GE.pins, GE.zArm + 0.1).name = 'pin';        // a lifting pin, in the plane of the arms
+    }
+    on(rE.group, new THREE.Mesh(cyl(0.8, 0.5), MAT.bronze), 0, 0, GE.zWheel); on(rE.group, new THREE.Mesh(cyl(GE.pins + 0.25, 0.2), MAT.bronze), 0, 0, GE.zArm + 0.5);
+    ENVELOPES.push({ x: rE.center.x, y: rE.center.y, r: GE.legs + 0.1, z0: GE.zWheel - 0.3, z1: GE.zWheel + 0.3 }, { x: rE.center.x, y: rE.center.y, r: GE.pins + 0.4, z0: GE.zArm - 0.45, z1: GE.zArm + 0.7 });
+    // The arms. Each is drawn as it hangs when lifted, and turns about its pivot from there. An arm is a light
+    // tube: its weight, bearing inward because it hangs outward, is the impulse, and has to be what ARM asks.
+    const dy = Yp - ESC.y, phi = Math.atan2(GE.armX - GE.pivotX, dy), len = (Yp - GE.beatY) / Math.cos(phi), xa = GE.armX - GE.pivotX, face = GE.pins + GE.pinR - GE.pivotX;
+    const xfoot = Math.sin(phi) * len, xpin = (PEND.pivotY - GE.beatY) * Math.sin(G_UP) + 1.1 + 0.16 - GE.pivotX, back = GE.zArm - (PEND.z - 0.35);
+    armKg = ARM * pendKg * L * L / (GRAV * xfoot / 2);                                           // its weight acts at the middle of its length, half its foot's distance out
+    const arm = (sg) => {
+      const A = new THREE.Group(); A.position.set(sg * GE.pivotX, Yp, GE.zArm); G.scene.add(A); G.machines.push(A);
+      gbox(A, MAT.rail, 0.3, len, 0.22, sg * xfoot / 2, -(Yp - GE.beatY) / 2, 0).rotation.z = sg * phi;                             // the arm itself
+      gbox(A, st, xa - face, 0.3, 0.2, sg * (xa + face) / 2, -dy, 0);                                                                // a finger in toward the sleeve,
+      gbox(A, MAT.bronze, 0.2, 1.3, 0.5, sg * (face + 0.1), -dy - sg * 0.35, 0).name = 'pallet';                                     // ending in the pallet a pin pushes
+      gbox(A, MAT.bronze, 0.6, 0.4, GE.zWheel - GE.zArm + 0.35, sg * (GE.legs - 0.03 + 0.3 - GE.pivotX), -dy + sg * 0.4, (GE.zWheel - GE.zArm + 0.1) / 2).name = 'stop';     // the stop: over the leg on one side, under it on the other
+      gbox(A, st, xfoot - xpin + 0.3, 0.26, 0.2, sg * (xfoot + xpin) / 2, GE.beatY - Yp, 0);                                         // and at the foot, an arm in to the beat pin,
+      const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, back, 14).rotateX(Math.PI / 2), st); pin.position.set(sg * xpin, GE.beatY - Yp, -back / 2); A.add(pin);       // which reaches back to the pendulum rod
+      const stud = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.7, 16).rotateX(Math.PI / 2), MAT.bronze); stud.userData.shaft = true; A.add(stud);
+      return A;
+    };
+    armR = arm(1); armL = arm(-1);
+    for (const sg of [-1, 1]) ENVELOPES.push({ x: sg * (GE.pivotX + xpin + 0.35), y: GE.beatY, r: 0.75, z0: PEND.z, z1: GE.zArm + 0.2 });       // where the beat pins move
+    G.tag = 'bearing';
+    for (const sg of [-1, 1]) for (const dz of [-0.24, 0.24]) ibox('iron', 0.44, ARBOR.pivot.y - 1.1 - Yp + 0.45, 0.1, sg * GE.pivotX, (ARBOR.pivot.y - 1.1 + Yp - 0.45) / 2, GE.zArm + dz);       // the cocks the arms hang from, under the head beam: a cheek either side of each arm
+    G.tag = '';
   }
-  mountGear(rEsc, S.escP, LAYER.A, MAT.steel); mountArbor(rEsc, ...SHAFT.esc.z, SHAFT.esc.r);
-  mountGear(rThird, S.third, LAYER.A, MAT.brass); mountGear(rThird, S.thirdP, LAYER.B, MAT.steel); mountArbor(rThird, ...SHAFT.third.z, SHAFT.third.r);
+  mountGear(rEsc, S.escP, LAYER.A, MAT.steel); mountArbor(rEsc, ...SHAFT.esc.z, SHAFT.esc.r, [false, true]);         // (behind, the escape wheel's hub is all but against the pendulum's frame)
+  mountGear(rThird, S.third, LAYER.A, MAT.brass); mountGear(rThird, S.thirdP, LAYER.B, MAT.steel); mountArbor(rThird, ...SHAFT.third.z, SHAFT.third.r, [true, false]);       // (its front end stops just short of a walkway)
   mountGear(rCenter, S.center, LAYER.B, MAT.brass); mountGear(rCenter, S.centerP, LAYER.C, MAT.steel);
-  mountGear(rCenter, S.cannon, LAYER.motionA, MAT.steel); mountArbor(rCenter, ...SHAFT.center.z, SHAFT.center.r);
-  mountGear(rGreat, S.great, LAYER.C, MAT.brass); mountArbor(rGreat, ...SHAFT.great.z, SHAFT.great.r);
+  mountGear(rCenter, S.cannon, LAYER.motionA, MAT.steel); mountArbor(rCenter, ...SHAFT.center.z, SHAFT.center.r, [false, true]);       // (its back end stops just short of a walkway)
+  mountGear(rGreat, S.great, LAYER.C, MAT.brass); mountArbor(rBarrel, ...SHAFT.great.z, SHAFT.great.r, [false, false]);      // (the ratchet is its fitting at one end, the clutch gear at the other)
   mountGear(rMinute, S.minuteW, LAYER.motionA, MAT.brass); mountGear(rMinute, S.minuteP, LAYER.motionB, MAT.steel); mountArbor(rMinute, ...SHAFT.minute.z, SHAFT.minute.r);
   mountGear(rHour, S.hourW, LAYER.motionB, MAT.brass);
 
   // ---- what all this weighs, declared to the structural model (structure/model.js).
   // Each arbor is a steel shaft carrying its wheels as loads, resting in its two bearings.
   {
-    const st = MATERIAL.steel, bob = Math.PI * PEND.bobR ** 2 * 2.2 * MATERIAL.brass.rho, rods = 5 * cylinderMass(0.17, PEND.L - 9);
+    const st = MATERIAL.steel;
     const on = {
-      esc: [[LAYER.esc, wheelMass(S.esc), 'escape wheel'], [LAYER.A, wheelMass(S.escP, st), 'escape pinion']],
-      pivot: [[PEND.z, bob + rods, 'pendulum'], [ESC.z, 64 * st.rho, 'anchor']],
+      esc: [[GE.zBrake, 55e3, 'brake disc'], [SHAFT.esc.z[0], 4e3, 'remontoire and escape wheel'], [LAYER.A, wheelMass(S.escP, st), 'pinion']],
+      pivot: [[PEND.z, pendKg, 'pendulum'], [GE.zArm, 2 * armKg, 'gravity arms']],
       third: [[LAYER.A, wheelMass(S.third), 'third wheel'], [LAYER.B, wheelMass(S.thirdP, st), 'third pinion']],
       center: [[LAYER.B, wheelMass(S.center), 'centre wheel'], [LAYER.C, wheelMass(S.centerP, st), 'centre pinion'], [LAYER.motionA, wheelMass(S.cannon, st), 'cannon pinion'],
-        [LAYER.motionB, wheelMass(S.hourW), 'hour wheel'], [39.8, cylinderMass(2.1, 15.6, MATERIAL.brass, 1.55), 'hour pipe'], [47, 205 * MATERIAL.castIron.rho, 'hands']],
-      great: [[LAYER.C, wheelMass(S.great), 'great wheel'], [27, cylinderMass(5, 4, MATERIAL.brass, 3.5), 'barrel'], [27, cylinderMass(4.5, 16, MATERIAL.castIron), 'driving weight']],
+        [LAYER.motionB, wheelMass(S.hourW), 'hour wheel'], [39.8, cylinderMass(2.1, 15.6, MATERIAL.brass, 1.55), 'hour pipe'], [47, 85e3, 'hands'], [34.5, 140e3, 'counterpoises']],
+      great: [[LAYER.C, wheelMass(S.great), 'great wheel'], [27, cylinderMass(5, 4, MATERIAL.brass, 3.5), 'barrel'], [27, cylinderMass(WIND.weightR, WIND.weightH, MATERIAL.castIron), 'driving weight'],
+        [WIND.z, wheelMass(S.wind, MATERIAL.alloy) + 60e3, 'winding wheel and clutch']],
       minute: [[LAYER.motionA, wheelMass(S.minuteW), 'minute wheel'], [LAYER.motionB, wheelMass(S.minuteP, st), 'minute pinion']],
     };
     for (const [name, loads] of Object.entries(on)) {
       const sh = SHAFT[name], a = ARBOR[name], A = assembly(`arbor ${name}`, 'alloy-steel shaft on two bearings');
-      A.member([a.x, a.y, sh.z[0]], [a.x, a.y, sh.z[1]], SECTION.round(sh.r), MATERIAL.alloy, 'beam', 'arbor');
+      A.member([a.x, a.y, sh.z[0]], [a.x, a.y, sh.z[1]], sh.beam ? SECTION.box(2.2, 1.6, 0.2) : SECTION.round(sh.r), MATERIAL.alloy, 'beam', sh.beam ? 'head beam' : 'arbor');
       for (const [z, kg, label] of loads) A.mass([a.x, a.y, z], kg, label);
-      for (const z of sh.bearings) A.rest([a.x, a.y, z], `tower ${name}`);
+      // Both bearings hold the arbor endwise (a thrust collar either side of each, with a millimetre of end
+      // shake), as an arbor is held between a clock's two plates. The wheels fill the space between the two
+      // frames of its tower at the top, so the arbor is the only thing that can tie their heads together, and
+      // it does (structure.js declares it in the tower as a tie). The arbor and the frames are the same steel
+      // in the same air, so warming does not force them: a few degrees' difference over the 10 to 20 m
+      // between bearings is half a millimetre, against a head that gives a millimetre to 20 kN.
+      sh.bearings.forEach((z) => A.rest([a.x, a.y, z], `tower ${name}`, 'pin'));
     }
+    // The teeth. The driving weight's pull on the barrel is a torque on the great arbor, and every pair of
+    // wheels in the train passes it on at the pitch circles: a push along the common tangent, and (the teeth
+    // are 20 degree involutes) a third as much again pushing the two arbors apart. The weight hangs whenever
+    // the clock exists, so this is as permanent as the weights are; it is declared as its own case.
+    const torque = cylinderMass(WIND.weightR, WIND.weightH, MATERIAL.castIron) * GRAV * WIND.barrelR, PA = Math.tan(20 * DEG);
+    const pairs = [['great', S.great, 'center', S.centerP, LAYER.C], ['center', S.center, 'third', S.thirdP, LAYER.B], ['third', S.third, 'esc', S.escP, LAYER.A]];
+    // (The weight hangs on the left of the great arbor, so that arbor turns anticlockwise seen from the dial,
+    // and each arbor after it the other way. A driver's teeth push the follower the way the driver's rim is moving.)
+    // Each arbor is also twisted, between where its torque comes in and where it goes out.
+    let T = torque, sense = 1;
+    assembly('arbor great').force([ARBOR.great.x, ARBOR.great.y, 27], [0, 0, 0, 0, 0, torque], 'the driving weight, on the barrel', 'teeth');
+    for (const [dn, sd, fn, sf, z] of pairs) {
+      const A = ARBOR[dn], B = ARBOR[fn], d = [B.x - A.x, B.y - A.y], l = Math.hypot(d[0], d[1]), u = [d[0] / l, d[1] / l], t = [-u[1] * sense, u[0] * sense];
+      const F = T / sd.r, push = [t[0] * F + u[0] * F * PA, t[1] * F + u[1] * F * PA];       // on the follower; the driver gets the opposite
+      assembly(`arbor ${fn}`).force([B.x, B.y, z], [push[0], push[1], 0, 0, 0, -sense * F * sf.r], `the ${dn} wheel's teeth`, 'teeth');
+      assembly(`arbor ${dn}`).force([A.x, A.y, z], [-push[0], -push[1], 0, 0, 0, -sense * F * sd.r], `the ${fn} pinion's teeth`, 'teeth');
+      T = F * sf.r; sense = -sense;
+    }
+    assembly('arbor esc').force([ARBOR.esc.x, ARBOR.esc.y, GE.zBrake], [0, 0, 0, 0, 0, -sense * T], 'the brake, which takes what the escapement does not', 'teeth');
+    // The pendulum. At the end of each swing its rod leans 3 degrees and pulls the suspension sideways by
+    // m g sin 3 cos 3, about 5 % of its weight, one way and then, ten seconds later, the other.
+    assembly('arbor pivot').force([ARBOR.pivot.x, ARBOR.pivot.y, PEND.z], [pendKg * GRAV * Math.sin(PEND.theta0) * Math.cos(PEND.theta0), 0, 0], 'the pendulum at the end of its swing', 'pendulum');
   }
 
-  // Escape wheel: tooth 0 sits at clock-angle (alpha + 11deg) from the top, turning clockwise seen from the dial side.
-  rEsc.k = -1; rEsc.c = Math.PI / 2 - 11 * DEG;
-  link(rEsc, 16, rThird, 48); link(rThird, 20, rCenter, 40); link(rCenter, 10, rGreat, 80);
+  rEsc.k = -1; rEsc.c = 0;                // the last arbor of the train: once a minute, without stopping
+  link(rEsc, 12, rThird, 96); link(rThird, 16, rCenter, 120); link(rCenter, 10, rGreat, 80);
   link(rCenter, 20, rMinute, 60); link(rMinute, 15, rHour, 60);
   const train = [rEsc, rThird, rCenter, rGreat, rMinute, rHour];
 
-  // barrel, chain and driving weight
+  // ---- barrel, line and driving weight
+  // The weight's fall is what drives the clock. The barrel is fast on the great arbor; the great wheel rides
+  // loose on the same arbor, so the arbor can be turned back to wind the weight up without turning the clock
+  // back. Between them is Harrison's maintaining power. The arbor's ratchet does not push the wheel itself but a
+  // second, loose ratchet ring, through clicks; the ring pushes the wheel through springs, which the weight keeps
+  // compressed. While the arbor is being turned back a detent on the frame stops the ring following it, and the
+  // springs go on pushing the wheel: about 70 t of them, for the two and a half minutes a winding takes.
+  const wx = ARBOR.great.x - WIND.barrelR, WH = WIND.weightH, weightKg = cylinderMass(WIND.weightR, WH, MATERIAL.castIron), fall = TAU * WIND.barrelR / 28800;      // m/s: one turn of the barrel in eight hours
+  let weight, line, collar, lever, trip, placeWeight;
+  const collarOut = WIND.z + 1.8;
   {
-    const g = new THREE.CylinderGeometry(5, 5, 4, 40); g.rotateX(Math.PI / 2);
-    const barrel = new THREE.Mesh(g, MAT.bronze); barrel.position.z = 27; rGreat.group.add(barrel);
-    rGreat.addCollider(R.ColliderDesc.cylinder(2, 5).setRotation(QX).setTranslation(0, 0, 27));
-    ENVELOPES.push({ x: rGreat.center.x, y: rGreat.center.y, r: 6, z0: 24.8, z1: 29.2 });
-    for (const z of [25, 29]) { const fl = new THREE.Mesh(new THREE.CylinderGeometry(6, 6, 0.4, 40).rotateX(Math.PI / 2), MAT.iron); fl.position.z = z; rGreat.group.add(fl); }
-    const now = new Date(), frac = ((now.getHours() % 8) * 3600 + now.getMinutes() * 60) / 28800;
-    const wx = ARBOR.great.x - 5, wTop = 72 - TAU * 5 * frac;
-    ibox('iron', 0.5, ARBOR.great.y - wTop, 0.35, wx, (ARBOR.great.y + wTop) / 2, 27);
-    icyl('iron', 4.5, 16, wx, wTop - 8, 27); icyl('bronze', 4.7, 0.6, wx, wTop - 1.5, 27); icyl('bronze', 4.7, 0.6, wx, wTop - 14.5, 27);
-    G.world.createCollider(R.ColliderDesc.cylinder(8, 4.5).setTranslation(wx, wTop - 8, 27));
+    const g = new THREE.CylinderGeometry(WIND.barrelR, WIND.barrelR, 4, 40); g.rotateX(Math.PI / 2);
+    const barrel = new THREE.Mesh(g, MAT.bronze); barrel.position.z = 27; rBarrel.group.add(barrel);
+    rBarrel.addCollider(R.ColliderDesc.cylinder(2, WIND.barrelR).setRotation(QX).setTranslation(0, 0, 27));
+    ENVELOPES.push({ x: rBarrel.center.x, y: rBarrel.center.y, r: 6, z0: 24.8, z1: 29.2 });
+    for (const z of [25, 29]) { const fl = new THREE.Mesh(new THREE.CylinderGeometry(6, 6, 0.4, 40).rotateX(Math.PI / 2), MAT.iron); fl.position.z = z; rBarrel.group.add(fl); }
+    // the going ratchet, on the arbor behind the great wheel, and the clicks on the wheel's spokes that it pushes
+    const rs = { N: 48, t: 0.5, R: 5.7, rr: 5.2, depth: 0.5, pa: TAU / 48, spokes: 0, recess: false }, rz = LAYER.C - hubHalf(S.great) - 0.3;
+    const ratchet = new THREE.Mesh(gearGeometry(rs, escapeOutline(rs)), MAT.steel); ratchet.position.z = rz; rBarrel.group.add(ratchet);
+    ENVELOPES.push({ x: rBarrel.center.x, y: rBarrel.center.y, r: 8.0, z0: rz - 0.4, z1: rz + 0.4 });
+    // the maintaining ratchet: a loose ring round the arbor's ratchet, toothed on its outer edge for the frame's detent
+    const ms = { N: 60, R: 7.7, rr: 7.2, depth: 0.5, pa: TAU / 60 }, ringShape = new THREE.Shape(escapeOutline(ms)); ringShape.holes.push(new THREE.Path().absarc(0, 0, 6.3, 0, TAU, true));
+    const ring = new THREE.Mesh(extrude(ringShape, 0.4, 0.04, 24, 1), MAT.steel); ring.position.z = rz; rGreat.group.add(ring);
+    for (let i = 0; i < 4; i++) {
+      // four clicks on the ring, a quarter of a tooth out of step with one another, so that one of them is always nearly home
+      const an = i * TAU / 4 + i * rs.pa / 4, px = Math.cos(an) * 6.25, py = Math.sin(an) * 6.25;
+      const click = gbox(rGreat.group, MAT.steel, 0.9, 0.3, 0.36, px - Math.cos(an + 1.2) * 0.35, py - Math.sin(an + 1.2) * 0.35, rz); click.rotation.z = an + 1.2;
+      // and four springs from the ring to the wheel's spokes. They lie in the gap between the ring's face and the wheel's,
+      // not in the ring's own plane: that plane has to stay empty outside the teeth, because the frame's detent stands in it
+      const sa = (i + 0.5) * TAU / 4, sz = rz + 0.37, stud = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.5, 14).rotateX(Math.PI / 2), MAT.steel); stud.position.set(Math.cos(sa) * 9.6, Math.sin(sa) * 9.6, sz + 0.1); rGreat.group.add(stud);
+      gbox(rGreat.group, MAT.steel, 3.1, 0.5, 0.3, Math.cos(sa) * 8.2, Math.sin(sa) * 8.2, sz).rotation.z = sa;
+      gbox(rGreat.group, MAT.steel, 0.5, 0.7, 0.34, Math.cos(sa) * 6.85, Math.sin(sa) * 6.85, sz).rotation.z = sa;                  // its foot, bolted to the ring's face
+    }
+    // the winding wheel, and the dogs on its hub that the clutch takes hold of
+    const wheel = new THREE.Mesh(gearGeometry(S.wind), MAT.steel); wheel.position.z = WIND.z; rWind.group.add(wheel);
+    rivetRing(wheel, 7.3, 48, 0.7, 0.12);
+    rWind.addCollider(R.ColliderDesc.cylinder(0.7, S.wind.ra).setRotation(QX).setTranslation(0, 0, WIND.z));
+    ENVELOPES.push({ x: rWind.center.x, y: rWind.center.y, r: S.wind.ra, z0: WIND.z - 0.9, z1: WIND.z + 0.9 });
+    for (let i = 0; i < 6; i++) gbox(rWind.group, MAT.steel, 0.7, 0.5, 0.35, Math.cos(i * TAU / 6) * 2.0, Math.sin(i * TAU / 6) * 2.0, WIND.z + 1.05).rotation.z = i * TAU / 6;
+    // the clutch: a collar that slides on the arbor's key. In, its dogs take the winding wheel round with the arbor.
+    collar = new THREE.Group(); collar.position.z = collarOut; rBarrel.group.add(collar);
+    collar.add(new THREE.Mesh(new THREE.CylinderGeometry(2.3, 2.3, 0.22, 36).rotateX(Math.PI / 2).translate(0, 0, -0.2), MAT.bronze));
+    collar.add(new THREE.Mesh(new THREE.CylinderGeometry(1.9, 1.9, 0.5, 36).rotateX(Math.PI / 2), MAT.bronze));
+    collar.add(new THREE.Mesh(new THREE.CylinderGeometry(2.3, 2.3, 0.22, 36).rotateX(Math.PI / 2).translate(0, 0, 0.2), MAT.bronze));
+    for (let i = 0; i < 6; i++) gbox(collar, MAT.steel, 0.7, 0.5, 0.25, Math.cos((i + 0.5) * TAU / 6) * 2.0, Math.sin((i + 0.5) * TAU / 6) * 2.0, -0.4).rotation.z = (i + 0.5) * TAU / 6;
+    // Two arms on the arbor's end. The arbor swings through 23 degrees between one winding and the next, and
+    // nothing else: its angle is the weight's height. One arm reaches the clutch lever as the weight comes to
+    // the top and knocks the clutch out; the other reaches it when the weight has fallen two metres and knocks it in.
+    trip = new THREE.Group(); trip.position.z = WIND.z + 2.4; rBarrel.group.add(trip);
+    trip.add(new THREE.Mesh(new THREE.CylinderGeometry(1.9, 1.9, 0.3, 28).rotateX(Math.PI / 2), MAT.iron));
+    for (const an of [0, -WIND.band / WIND.barrelR]) {
+      const arm = gbox(trip, MAT.iron, 3.0, 0.4, 0.25, Math.cos(an) * 2.3, Math.sin(an) * 2.3, 0); arm.rotation.z = an;
+      const peg = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.7, 14).rotateX(Math.PI / 2), MAT.steel); peg.position.set(Math.cos(an) * 3.6, Math.sin(an) * 3.6, -0.4); trip.add(peg);
+    }
+    // the clutch lever: pivoted below, forked round the collar above
+    const py = ARBOR.great.y - WIND.wheelR - WIND.wormR + 1.6, pz = WIND.z + 1.75, len = ARBOR.great.y - 2.4 - py;
+    lever = new THREE.Group(); lever.position.set(ARBOR.great.x, py, pz); G.scene.add(lever); G.machines.push(lever);
+    gbox(lever, MAT.rail, 0.22, len, 0.16, 0, len / 2, 0);
+    for (const sx of [-1, 1]) gbox(lever, MAT.rail, 0.16, 2.6, 0.16, sx * 2.1, len + 1.1, 0);
+    gbox(lever, MAT.rail, 4.36, 0.2, 0.16, 0, len - 0.1, 0);
+    // the weight: cast iron, banded, hung by an eye from a steel rope
+    const wm = new THREE.Group();
+    wm.add(new THREE.Mesh(new THREE.CylinderGeometry(WIND.weightR, WIND.weightR, WH, 48), MAT.iron));
+    for (const y of [WH / 2 - 1.2, 0, -WH / 2 + 1.2]) { const band = new THREE.Mesh(new THREE.CylinderGeometry(WIND.weightR + 0.12, WIND.weightR + 0.12, 0.6, 48), MAT.bronze); band.position.y = y; wm.add(band); }
+    const eye = new THREE.Mesh(new THREE.TorusGeometry(1.1, 0.35, 10, 24), MAT.steel); eye.position.y = WH / 2 + 1.1; wm.add(eye);
+    weight = new Mover(wm, new THREE.Vector3(wx, WIND.top - WH / 2, 27));
+    weight.addCollider(R.ColliderDesc.cylinder(WH / 2, WIND.weightR));
+    line = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 1, 12), MAT.steel); line.position.set(wx, 0, 27); G.scene.add(line);
+    const _wp = new THREE.Vector3();
+    placeWeight = (dt) => {
+      _wp.set(wx, s.weightTop - WH / 2, 27);
+      if (dt) weight.set(_wp, dt); else { weight.pos.copy(_wp); weight.mesh.position.copy(_wp); weight.body.setTranslation(_wp, true); }
+      const span = ARBOR.great.y - s.weightTop - 2.4; line.position.y = s.weightTop + 2.4 + span / 2; line.scale.y = span;
+      collar.position.z = collarOut - 0.4 * s.clutch; lever.rotation.x = Math.atan2(collar.position.z - pz, len);
+    };
   }
 
   // hands (outside the glass) and their shadows (seen from inside, through it)
   {
     const minuteShape = new THREE.Shape([[-1.2, -10], [1.2, -10], [2.0, -2], [2.4, 6], [1.0, 46], [0, 50], [-1.0, 46], [-2.4, 6], [-2.0, -2]].map(p => new THREE.Vector2(...p)));
     const hourShape = new THREE.Shape([[-1.6, -8], [1.6, -8], [2.6, 0], [3.6, 18], [1.7, 30], [0, 34], [-1.7, 30], [-3.6, 18], [-2.6, 0]].map(p => new THREE.Vector2(...p)));
-    const mk = (rotor, shape, z, zShadow, len) => {
+    // The hands are hollow, of copper sheet on ribs (40 t and 45 t), and each is balanced by a counterpoise on the
+    // same arbor inside the hall, opposite to it: without that the minute hand would stall on its way up to the hour.
+    const mk = (rotor, shape, z, zShadow, len, cz, cl) => {
       const holder = new THREE.Group(); holder.rotation.z = -rotor.c; rotor.group.add(holder);
+      gbox(holder, MAT.iron, 0.9, cl, 0.4, 0, -cl / 2, cz);
+      const lens = new THREE.Mesh(new THREE.CylinderGeometry(2.0, 2.0, 0.44, 32).rotateX(Math.PI / 2), MAT.iron); lens.position.set(0, -cl, cz); holder.add(lens);
+      ENVELOPES.push({ x: rotor.center.x, y: rotor.center.y, r: cl + 2.2, z0: cz - 0.3, z1: cz + 0.3 });
       const hand = new THREE.Mesh(extrude(shape, 0.7, 0.14, 10, 2), MAT.rail); hand.position.z = z; holder.add(hand);
       const sh = new THREE.Mesh(new THREE.ShapeGeometry(shape), MAT.shadow); sh.position.z = zShadow; holder.add(sh);
       const boss = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 3.4, 1.0, 32).rotateX(Math.PI / 2), MAT.bronze); boss.position.z = z; holder.add(boss);
@@ -235,8 +447,8 @@ export function buildClockwork() {
       rotor.addCollider(R.ColliderDesc.cuboid(len / 2, 1.5, 0.35).setTranslation(Math.cos(a) * len * 0.42, Math.sin(a) * len * 0.42, z)
         .setRotation({ x: 0, y: 0, z: Math.sin(a / 2), w: Math.cos(a / 2) }));
     };
-    mk(rCenter, minuteShape, 48.6, 40.55, 56);
-    mk(rHour, hourShape, 47, 40.7, 40);
+    mk(rCenter, minuteShape, 48.6, 40.55, 56, 31.56, 9);
+    mk(rHour, hourShape, 47, 40.7, 40, 37.5, 8);
     const pipe = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.1, 15.6, 28).rotateX(Math.PI / 2), MAT.bronze); pipe.position.z = 39.8; rHour.group.add(pipe);
   }
 
@@ -246,12 +458,12 @@ export function buildClockwork() {
     const F = FLOOR, t = 1.6, cy = F.top - 0.1 - t / 2;
     const mk = (d) => {
       const s = spec(d.N, F.m, t), r = new Rotor(d.x, cy, d.z, QFLAT);
-      const m = new THREE.Mesh(gearGeometry(s), MAT.brass); r.group.add(m);
+      const m = new THREE.Mesh(gearGeometry(s), MAT.brass); m.userData.shaft = true; r.group.add(m);        // (its hub is its journal: it sits in the pivot)
       const fg = new THREE.CylinderGeometry(s.r, s.r, 0.1, 96); fg.rotateX(Math.PI / 2);
       const fl = new THREE.Mesh(fg, [MAT.bronze, MAT.turntable, MAT.bronze]); fl.position.z = t / 2 + 0.05; r.group.add(fl);
       addGearColliders(r, s, 0);                                                                      // every tooth is solid: stand in its way and it hits you
       r.addCollider(R.ColliderDesc.cylinder(0.05, s.r).setRotation(QX).setTranslation(0, 0, t / 2 + 0.05));   // the shroud you walk on
-      icyl('iron', Math.min(3, s.r * 0.4), cy - t / 2, d.x, (cy - t / 2) / 2, d.z);
+      G.tag = 'bearing'; icyl('iron', Math.min(3, s.r * 0.4), cy - t / 2 - 0.02, d.x, (cy - t / 2) / 2, d.z); G.tag = '';       // the pivot it turns on
       ENVELOPES.push({ floor: true, x: d.x, z: d.z, r: s.ra, top: F.top + 0.1 });
       r.spec = s; floorRotors.push(r); return r;
     };
@@ -265,7 +477,7 @@ export function buildClockwork() {
       const Ra = a.spec.r, Rb = b.spec.r, curv = 1 / Ra + 1 / Rb;
       nips.push({ a: a.center, ra: a.spec.ra - 0.2, b: b.center, rb: b.spec.ra - 0.2 });
       const dx = b.center.x - a.center.x, dz = b.center.z - a.center.z, len = Math.hypot(dx, dz), ux = dx / len, uz = dz / len;
-      const d = Math.sqrt(2 * (1.1 + 2 * F.m) / curv), off = d * d * (1 / Rb - 1 / Ra) / 4;       // where the gap is 1.1 m, and its middle
+      const d = Math.sqrt(2 * (1.35 + 2 * F.m) / curv), off = d * d * (1 / Rb - 1 / Ra) / 4;       // where the gap is 1.1 m, and its middle
       const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(-uz, ux));
       for (const sg of [-1, 1]) {
         const gx = a.center.x + ux * (Ra + off) - uz * d * sg, gz = a.center.z + uz * (Ra + off) + ux * d * sg;
@@ -273,18 +485,22 @@ export function buildClockwork() {
         ibox('rail', 1.1, 0.1, 0.2, gx, 2.15, gz, q);
       }
     }
-    // main shaft rising out of the big wheel
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, 14, 24).rotateX(Math.PI / 2), MAT.steel); shaft.position.z = 7.9; h1.group.add(shaft);
-    h1.addCollider(R.ColliderDesc.cylinder(7, 1.1).setRotation(QX).setTranslation(0, 0, 7.9));
-    for (const a of [0, Math.PI]) { const ball = new THREE.Mesh(new THREE.SphereGeometry(1.0, 20, 14), MAT.brass); ball.position.set(Math.cos(a) * 3.2, Math.sin(a) * 3.2, 12.5); h1.group.add(ball); gbox(h1.group, MAT.steel, 3.2, 0.25, 0.25, Math.cos(a) * 1.6, 0, 13.6).rotation.y = a ? -0.35 : 0.35; }
+    // the great floor wheel's hub is held down by a nut on its spindle
+    const hn = new THREE.Mesh(NUT, MAT.bronze); hn.scale.set(2.4, 2.4, 1.3); hn.position.z = t / 2 + 0.1 + 0.65; h1.group.add(hn);
+    h1.addCollider(R.ColliderDesc.cylinder(0.65, 2.1).setRotation(QX).setTranslation(0, 0, t / 2 + 0.75));
     // the flywheel on the fast pinion's shaft: at the rim, grip runs out
     const fz = F.flyTop - 0.4 - cy;
     const fwg = new THREE.CylinderGeometry(F.flyR, F.flyR, 0.8, 96); fwg.rotateX(Math.PI / 2);
     const fw = new THREE.Mesh(fwg, [MAT.bronze, MAT.turntable, MAT.bronze]); fw.position.z = fz; h3.group.add(fw);
     const rim = new THREE.Mesh(new THREE.TorusGeometry(F.flyR - 0.25, 0.42, 10, 96), MAT.brass); rim.position.z = fz; h3.group.add(rim);
-    const fs = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.0, fz, 24).rotateX(Math.PI / 2), MAT.steel); fs.position.z = fz / 2 + 0.4; h3.group.add(fs);
+    // The shaft is cranked: it stops below the engine's connecting rod and starts again above it, the two
+    // halves joined only by the crank webs and the pin between them (engine/model.js). A straight shaft
+    // would stand in the rod's way once every turn.
     h3.addCollider(R.ColliderDesc.cylinder(0.4, F.flyR).setRotation(QX).setTranslation(0, 0, fz));
-    h3.addCollider(R.ColliderDesc.cylinder(fz / 2, 1.0).setRotation(QX).setTranslation(0, 0, fz / 2 + 0.4));
+    for (const [z0, z1] of [[0.4, CRANK.lower - 0.125 - cy], [CRANK.upper + 0.125 - cy, fz + 0.4]]) {
+      const fs = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.0, z1 - z0, 24).rotateX(Math.PI / 2), MAT.steel); fs.position.z = (z0 + z1) / 2; h3.group.add(fs);
+      h3.addCollider(R.ColliderDesc.cylinder((z1 - z0) / 2, 1.0).setRotation(QX).setTranslation(0, 0, (z0 + z1) / 2));
+    }
 
     // ways up
     stair([F.h1.x, 0, F.h1.z - h1.spec.ra - 5.6], [F.h1.x, F.top, F.h1.z - h1.spec.ra - 0.25], 3);
@@ -296,78 +512,352 @@ export function buildClockwork() {
     lamp(px0 + 0.2, F.flyTop, pzc - 2);
   }
 
-  // ---- paternoster lifts: every platform moves one storey on each beat
-  const stations = [], platforms = [];
+  // ---- the winding gear: how the engine raises the driving weight
+  // Two worms drive the winding wheel, one either side of it, at three o'clock and nine, each on an upright shaft that
+  // stands on the floor. The weight's whole pull at the wheel's rim, 16 MN, is shared between them: the worm on the side
+  // where the rim comes down pushes it down and is pushed up, the one where it rises pushes it up and is pushed down. So
+  // the arbor feels a pure couple, the two pushes being equal and opposite and 18 m apart, and nothing else but the
+  // worms' small end-thrust along it; and each worm's half goes straight down its own shaft to a thrust bearing on the
+  // floor, one shaft in tension and the other in compression. The torque never enters the tower. (A single worm could
+  // not do this: its push on the rim is a force on the arbor, and the arbor's tower, an A-frame with a narrow head, is
+  // the worst thing there is to hold 16 MN sideways at the top of.) The teeth also push each worm off the wheel, a third
+  // as much again, opposite ways on the two sides; each shaft runs in a pair of radial bearings just above and below its
+  // worm, and the four are tied to one another by a yoke through the tower's front frame (world/structure.js), so that
+  // pair of forces closes in the yoke too.
+  // The idler of the floor train carries an upright stub with a mitre wheel. From it a line shaft runs across the floor to
+  // a crown wheel at the foot of the right-hand upright; a cross shaft at the same height takes the drive on from the
+  // same crown wheel to the crown wheel at the foot of the left-hand one. All of it turns whenever the engine does, the
+  // winding wheel idling on the arbor; when the clutch goes in, the wheel takes the arbor and the barrel round with it
+  // and the weight comes up.
+  let windSpeed;
   {
-    const ys = [0, ...LEVELS];
-    for (const y of ys) stations.push(new THREE.Vector3(LIFT.xu, y + 0.02, LIFT.z));
-    for (const y of [...ys].reverse()) stations.push(new THREE.Vector3(LIFT.xd, y + 0.02, LIFT.z));
-    const geo = new THREE.BoxGeometry(LIFT.hx * 2, 0.3, LIFT.hz * 2); geo.translate(0, -0.15, 0);
-    const uv = geo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 1.2, uv.getY(i));
-    for (let i = 0; i < stations.length; i++) {
-      const mesh = new THREE.Mesh(geo, MAT.plate);
-      gbox(mesh, MAT.bronze, LIFT.hx * 2 + 0.1, 0.12, 0.12, 0, -0.06, LIFT.hz); gbox(mesh, MAT.bronze, LIFT.hx * 2 + 0.1, 0.12, 0.12, 0, -0.06, -LIFT.hz);
-      const mv = new Mover(mesh, stations[i]);
-      mv.addCollider(R.ColliderDesc.cuboid(LIFT.hx, 0.15, LIFT.hz).setTranslation(0, -0.15, 0));
+    const st = MAT.steel, h2 = floorRotors[1], ar = ARBOR.great, wz = WIND.z, m = S.wind.m, N = WIND.teeth, off = WIND.wheelR + WIND.wormR;
+    const xs = [ar.x + off, ar.x - off];                             // the right-hand upright, which the line shaft drives, and the left
+    const A1 = new THREE.Vector3(FLOOR.h2.x, WIND.shaftY, FLOOR.h2.z), A2 = new THREE.Vector3(xs[0], WIND.shaftY, wz);
+    const d = A2.clone().sub(A1), len = d.length(); d.normalize();
+    const DOWN = new THREE.Vector3(0, -1, 0), WEST = new THREE.Vector3(-1, 0, 0), EAST = new THREE.Vector3(1, 0, 0), back = d.clone().negate(), span = xs[0] - xs[1];
+    const mitre = { N: 18, r: 1.0, face: 0.5 }, pin = { N: 15, r: 0.75 }, crown = { N: 54, r: 2.7 }, cp = Math.atan(pin.N / crown.N);
+    const add = (group, geo, z = 0, flip = false) => { const mesh = new THREE.Mesh(geo, st); mesh.position.z = z; if (flip) mesh.rotation.x = Math.PI; mesh.userData.shaft = !!geo.userData.shaft; group.add(mesh); return mesh; };
+    const rod = (r, z0, z1) => { const g = new THREE.CylinderGeometry(r, r, z1 - z0, 20).rotateX(Math.PI / 2).translate(0, 0, (z0 + z1) / 2); g.userData.shaft = true; return g; };
+    const mitreGeo = bevelGeometry(mitre.N, mitre.r, mitre.face, Math.PI / 4), pinGeo = bevelGeometry(pin.N, pin.r, 0.6, cp, 0.5, 0.8), crownGeo = bevelGeometry(crown.N, crown.r, 0.6, Math.PI / 2 - cp, 0.9, 0.9);
+    const along = (p, u, t) => p.clone().addScaledVector(u, t), V = (x, y) => new THREE.Vector3(x, y, wz);
+    // the idler's stub and its mitre wheel, teeth uppermost
+    const cy = h2.center.y, top = WIND.shaftY - 0.3 - cy;
+    add(h2.group, rod(0.45, 0.9, top)); add(h2.group, mitreGeo, WIND.shaftY - cy);
+    h2.addCollider(R.ColliderDesc.cylinder((top - 0.9) / 2, 1.1).setRotation(QX).setTranslation(0, 0, (top + 0.9) / 2));
+    // the line shaft: a mitre wheel at this end, a pinion at the other
+    const lineR = 0.28, shaft = new Spinner(A1, d); shaft.k = h2.k;
+    add(shaft.group, rod(lineR, 0.6, len - 2.4)); add(shaft.group, mitreGeo, 0, true); add(shaft.group, pinGeo, len);
+    meshBevels(h2, DOWN, shaft, d, TAU / mitre.N);
+    solidCyl(along(A1, d, 1.9), along(A1, d, len - 3.7), lineR + 0.02); solidCyl(along(A1, d, 0.5), along(A1, d, 1.9), 1.15); solidCyl(along(A1, d, len - 3.7), along(A1, d, len - 2.3), 0.9);
+    // The two upright shafts: solid steel, 1.2 m through, each with a crown wheel at its foot under the horizontal
+    // shafts and its worm level with the arbor. The left-hand one is pushed down by its worm, and the arms that keep
+    // it in line can reach it only below and above the driving weight's fall (36 m and 90 m up, structure.js): 54 m
+    // unheld between, under its half of the pull and most of its own weight, a shaft a metre through would buckle
+    // at 2.4 times its greatest push, short of the 2.5 every frame here is held to; at 1.2 m it is 4.2. Both are
+    // made alike (one pattern, one set of bearings, a spare that fits either side). Their own weight (1,120 t each)
+    // stands on their footsteps too, which matters for the one the worm pulls up: it is most of what holds that one
+    // down (see structure.js).
+    const upR = 0.6, head = 2.7, yc = ar.y;
+    const upright = (x) => { const u = new Spinner(V(x, yc), YUP); add(u.group, rod(upR, 0.6 - yc, head)); add(u.group, crownGeo, WIND.shaftY - yc); return u; };
+    const uR = upright(xs[0]), uL = upright(xs[1]);
+    uR.k = -shaft.k * pin.N / crown.N;                               // the crown wheel turns 3.6 times slower than the line shaft
+    meshBevels(shaft, back, uR, DOWN, TAU / crown.N);
+    // the cross shaft, from beside the right-hand crown wheel to beside the left-hand one, a pinion at each end
+    const cross = new Spinner(A2, WEST); cross.k = uR.k * crown.N / pin.N;
+    add(cross.group, rod(lineR, 2.4, span - 2.4)); add(cross.group, pinGeo, 0, true); add(cross.group, pinGeo, span);
+    meshBevels(uR, DOWN, cross, WEST, TAU / pin.N);
+    // Both crown wheels are under their pinions, so the left-hand upright turns the other way to the right-hand one:
+    // the worms' thread then has to be of the same hand on both, for each to drive its side of the rim the way it goes.
+    uL.k = -uR.k;
+    meshBevels(cross, EAST, uL, DOWN, TAU / crown.N);
+    // The worms. The thread's surface where it meets the wheel moves along the shaft at -hand * pitch * omega / 2 pi: on
+    // the right, where the rim comes down, that must be downward, so the hand goes with the right-hand shaft's turning.
+    const hand = Math.sign(uR.k) || 1, wormGeo = wormGeometry(WIND.wormR, m, 3.2, hand);
+    add(uR.group, wormGeo); const wL = add(uL.group, wormGeo);
+    // Each colliding solid: the shaft, the crown wheel's hub and its toothed body (as drawn: the teeth from 4.33 to 4.69 m
+    // up, 2.73 m out at most; the hub below them, 0.9 m round), the worm, the shaft above it. The worm's core runs on a
+    // little past its thread (+-1.85 m); its bearings stand clear of that.
+    for (const x of xs) {
+      solidCyl(V(x, 0.6), V(x, 3.45), upR + 0.02); solidCyl(V(x, 3.45), V(x, 4.3), 0.95); solidCyl(V(x, 4.3), V(x, 4.74), 2.78); solidCyl(V(x, 4.74), V(x, yc - 1.9), upR + 0.02);
+      solidCyl(V(x, yc - 1.9), V(x, yc + 1.9), WIND.wormR + m + 0.02); solidCyl(V(x, yc + 1.9), V(x, yc + head), upR + 0.02);
+    }
+    const alongW = (t) => along(A2, WEST, t);
+    solidCyl(alongW(3.7), alongW(span - 3.7), lineR + 0.02); solidCyl(alongW(2.3), alongW(3.7), 0.9); solidCyl(alongW(span - 3.7), alongW(span - 2.3), 0.9);
+    spinners.push(shaft, uR, cross, uL);
+    // The wheel turns one tooth for each turn of a worm, and the right-hand worm's thread sits in a space between its
+    // teeth. (Its teeth are at j 2 pi / N on it, its spaces half way between. A crest of the worm on the side facing the
+    // wheel, angle pi in the shaft's own frame, is at height hand p (pi - a) / 2 pi for the shaft at angle a; the wheel's
+    // spaces pass three o'clock at heights R (theta + (j + 1/2) 2 pi / N).) The left-hand worm, whose shaft turns the other
+    // way, is then turned on its shaft so that its thread, facing the wheel at angle 0, sits in a space at nine o'clock,
+    // where the spaces are at heights -R (theta + (j + 1/2) 2 pi / N - pi) (N being even, pi R is a whole number of pitches).
+    rWind.k = -hand * uR.k / N;                                      // negative: clockwise from the dial, the way that raises the weight
+    rWind.c = (hand * (Math.PI - uR.c) - Math.PI) / N;
+    wL.rotation.z = hand * (N * rWind.c - Math.PI) - uL.c;
+    windSpeed = Math.abs(rWind.k) * WIND.barrelR;                    // m/s the weight rises, in clutch, at the engine's governed speed
+    // what the engineer needs to know to hold all this up. The forces are those while the weight is wound, per worm:
+    // along its shaft, half the weight's pull at the rim; pushing it off the wheel, that times tan 20 degrees; and across,
+    // the turning force of its own torque, tan(lead + friction) of the push along it, the friction being what makes the
+    // gear's efficiency (the whole winding train's, taken as all in the worms: the most it can be).
+    const tooth = weightKg * GRAV * WIND.barrelR / WIND.wheelR, half = tooth / 2;
+    const lead = Math.atan(Math.PI * m / (TAU * WIND.wormR)), turning = half * Math.tan(lead) / WIND.efficiency, sense = Math.sign(uR.k) || 1;
+    // The bevels at each crown wheel: tangential F (the torque the upright carries, 'turning' x wormR, over the crown
+    // wheel's radius), and the 20 degree teeth push the pinion up off it (F tan 20 cos of its cone) and the crown wheel
+    // out along its own axis, downward (the same), and apart sideways (F tan 20 sin). On the right-hand crown wheel the
+    // line shaft's pinion delivers both shafts' torque and the cross shaft's takes the left one's away.
+    const T1 = turning * WIND.wormR, F1 = T1 / crown.r, tz = Math.tan(20 * DEG);
+    const onCrown = (F, u, driven, s) => { const t = new THREE.Vector3(0, 1, 0).cross(u).multiplyScalar(s * (driven ? F : -F)); return t.addScaledVector(u, -F * tz * Math.sin(cp)).add(new THREE.Vector3(0, -F * tz * Math.cos(cp), 0)); };
+    const fLine = onCrown(2 * F1, back, true, sense), fCrossR = onCrown(F1, WEST, false, sense), fCrossL = onCrown(F1, EAST, true, -sense);
+    const crownY = WIND.shaftY - crown.r * Math.tan(cp);            // height of the crown wheels' pitch circles
+    Object.assign(WINDGEAR, {
+      A1: A1.toArray(), d: d.toArray(), len, lineY: WIND.shaftY, lineKg: cylinderMass(lineR, len) + 9e3, lineBearings: [2.5, 10.6, 19.6, 28.6, len - 4.6],
+      mitrePush: windSpeed * weightKg * GRAV / WIND.efficiency / Math.abs(shaft.k) / (mitre.r * 0.85),       // N at the teeth of the first mitre wheels
+      wz, y: yc, upR, top: yc + head, bearings: [yc - 2.3, yc + 2.3],          // the uprights' radial bearings either side of the worms
+      crownKg: 22e3, wormKg: cylinderMass(WIND.wormR, 3.2) + 6e3, crownY,
+      // each upright: where it stands, which way the teeth push its worm (up on the right, down on the left; off the
+      // wheel; across), and what the bevels do to its crown wheel
+      uprights: [{ name: 'right', x: xs[0], side: 1, push: [half * tz, half, -sense * turning], crown: fLine.clone().add(fCrossR).toArray() },
+        { name: 'left', x: xs[1], side: -1, push: [-half * tz, -half, -sense * turning], crown: fCrossL.toArray() }],
+      half, apart: half * tz, turning, thrust: 2 * sense * turning,     // and the arbor: the worms' turning forces, both the same way, along it
+    });
+    // every line shaft that wants trestles under it, and the pushes of its bevels on the trestle nearest each (the cross
+    // shaft has a trestle under every bearing: neither end is over a wheel)
+    const toArr = (v) => v.toArray().map(c => -c);
+    WINDGEAR.shafts = [{ A1: A1.toArray(), d: d.toArray(), kg: WINDGEAR.lineKg, bearings: WINDGEAR.lineBearings, load: 1, ends: [{ t: len - 2.7, push: toArr(fLine) }] },
+      { A1: A2.toArray(), d: WEST.toArray(), kg: cylinderMass(lineR, span) + 2 * 5e3, bearings: [4.6, span / 2, span - 4.6], load: 0, jib: false, ends: [{ t: 2.7, push: toArr(fCrossR) }, { t: span - 2.7, push: toArr(fCrossL) }] }];
+    WINDGEAR.stands = [];
+    // The arbor: the two halves of the weight's pull at the rim are a couple, which turns it and the barrel and lifts the
+    // weight; the worms' turning forces push the wheel along the arbor, both the same way, into its thrust collar at the
+    // front bearing, where the yoke that holds the worms takes it back (structure.js).
+    assembly('arbor great').force([ar.x, ar.y, WIND.z], [0, 0, WINDGEAR.thrust], 'the worms, while winding: their push along the arbor', 'winding');
+  }
+
+  // ---- the lift: a paternoster
+  // Two endless chains run over a pair of wheels at the top of the shaft and a pair at the bottom. Each car hangs
+  // from an axle between the chains, so it stays upright as it goes over the top and under the bottom, and the cars
+  // going up balance the cars coming down. It never stops: you step on and off as a car passes. The bottom wheels
+  // are turned by crossed belts from a second line shaft off the idler's mitre wheel, so the lift runs when the engine does.
+  const platforms = []; let placeLifts;
+  {
+    const L = LIFT, R3 = (L.xd - L.xu) / 2, xm = (L.xu + L.xd) / 2, run = L.yt - L.yb, half = Math.PI * R3, loop = 2 * run + 2 * half, zs = [L.z - L.hz - L.chain, L.z + L.hz + L.chain];
+    const h2 = floorRotors[1], A1 = new THREE.Vector3(FLOOR.h2.x, WIND.shaftY, FLOOR.h2.z), dB = new THREE.Vector3(0, 0, -1), DOWN = new THREE.Vector3(0, -1, 0);
+    // where the chain is, d metres round the loop from the foot of the rising side, and which way it is heading there
+    const at = (d, out, tan) => {
+      d = ((d % loop) + loop) % loop;
+      if (d < run) { out.set(L.xu, L.yb + d, 0); if (tan) tan.set(0, 1, 0); }
+      else if (d < run + half) { const u = (d - run) / R3; out.set(xm - R3 * Math.cos(u), L.yt + R3 * Math.sin(u), 0); if (tan) tan.set(Math.sin(u), Math.cos(u), 0); }
+      else if (d < 2 * run + half) { out.set(L.xd, L.yt - (d - run - half), 0); if (tan) tan.set(0, -1, 0); }
+      else { const u = (d - 2 * run - half) / R3; out.set(xm + R3 * Math.cos(u), L.yb - R3 * Math.sin(u), 0); if (tan) tan.set(-Math.sin(u), -Math.cos(u), 0); }
+      return out;
+    };
+    // The cars: a deck, and at each end a pair of hangers up to the axle it swings from. A car passes between the two
+    // wheels of each pair, top and bottom, so everything on it but the axle stays inside the deck's own width. The last
+    // of the deck on each open side slopes down to its edge: if the deck has come up a hand's breadth past the landing by
+    // the time you reach it, you walk up the slope instead of into the edge of the deck.
+    const flat = L.hz - L.sill, tilt = 0.45, drop = L.sill * Math.tan(tilt), zArm = L.hz - 0.06;
+    const deckGeo = new THREE.BoxGeometry(L.hx * 2, L.deck, flat * 2).translate(0, -L.deck / 2, 0), armLen = Math.hypot(L.hx - 0.15, L.hang), lean = Math.atan2(L.hx - 0.15, L.hang);
+    LIFTGEAR.own = new Set();
+    for (let i = 0; i < L.cars; i++) {
+      const car = new THREE.Mesh(deckGeo, MAT.plate);
+      const mv = new Mover(car, new THREE.Vector3(L.xu, L.yb, L.z));
+      LIFTGEAR.own.add(mv.addCollider(R.ColliderDesc.cuboid(L.hx, L.deck / 2, flat).setTranslation(0, -L.deck / 2, 0)).handle);
+      for (const sz of [-1, 1]) {
+        // the sloping sill (shallow: a steeper one is a wall to anyone walking onto it), and the edge bar under its lip
+        const q = sz * tilt, zc = sz * (L.hz - L.sill / 2), yc = -drop / 2 - 0.02 * Math.cos(tilt);
+        gbox(car, MAT.plate, 2 * L.hx, 0.04, L.sill / Math.cos(tilt), 0, yc, zc).rotation.x = q;
+        LIFTGEAR.own.add(mv.addCollider(R.ColliderDesc.cuboid(L.hx, 0.02, L.sill / Math.cos(tilt) / 2).setTranslation(0, yc, zc).setRotation({ x: Math.sin(q / 2), y: 0, z: 0, w: Math.cos(q / 2) })).handle);
+        gbox(car, MAT.bronze, 2 * L.hx, 0.06, 0.06, 0, -L.deck + 0.03, sz * (L.hz - 0.03));
+        // the hangers stand on a foot at each corner, inside the deck's edge
+        for (const sx of [-1, 1]) {
+          gbox(car, MAT.rail, 0.14, armLen, 0.1, sx * (L.hx - 0.15) / 2, L.hang / 2, sz * zArm).rotation.z = sx * lean;
+          gbox(car, MAT.rail, 0.2, L.deck, 0.1, sx * (L.hx - 0.1), -L.deck / 2, sz * zArm);
+        }
+      }
+      const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 2 * (L.hz + L.chain) + 0.3, 12).rotateX(Math.PI / 2), MAT.steel); axle.position.y = L.hang; axle.userData.axle = true; car.add(axle);
       platforms.push(mv);
     }
+    // the four chain wheels, each on a stub axle in a bearing on its outer side: nothing can cross between them, where the cars pass
+    const ws = spec(L.teeth, 2 * R3 / L.teeth, 0.3, { spokes: 6, spokeW: 0.3, hubR: 0.7, rimIn: R3 - 0.55 }), wheelGeo = gearGeometry(ws), wheels = [];
+    const cyl = (r, z0, z1) => new THREE.CylinderGeometry(r, r, Math.abs(z1 - z0), 28).rotateX(Math.PI / 2).translate(0, 0, (z0 + z1) / 2);
+    const pulleyR = L.driven, belts = [];      // the driven pulleys are the larger: the chain runs at walking pace, slow enough to step on and off
+    for (const y of [L.yb, L.yt]) for (const z of zs) {
+      const w = new Spinner(new THREE.Vector3(xm, y, z), ZAXIS), out = z < L.z ? -1 : 1;
+      w.group.add(new THREE.Mesh(wheelGeo, MAT.iron));
+      const stub = new THREE.Mesh(cyl(0.22, 0, out * (y === L.yb ? 1.8 : 1.15)), MAT.steel); stub.userData.shaft = true; w.group.add(stub);       // wheel, then its bearing, then (below) the belt pulley
+      if (y === L.yb) { w.group.add(new THREE.Mesh(cyl(pulleyR, out * 1.2, out * 1.7), MAT.iron)); belts.push(z + out * 1.45); }
+      LIFTGEAR.wheels.add(solidCyl(new THREE.Vector3(xm, y, z - 0.15), new THREE.Vector3(xm, y, z + 0.15), R3 + 0.28).handle);
+      wheels.push(w);
+      WINDGEAR.stands.push(y === L.yb ? { foot: true, top: [xm, y - 0.45, z + out * 0.75], feet: [[xm - R3, 0.4, z + out * 0.75], [xm + R3, 0.4, z + out * 0.75]], kg: 6e3 } : { head: true, p: [xm, y, z + out * 0.75] });
+    }
+    // the chains: links carried round with the cars
+    // The chains: roller chain, a roller on every pin and a pair of side plates from each pin to the next, the pairs
+    // alternately inside and outside one another. One link to a tooth; a car hangs from every fourteenth pin.
+    const n = Math.round(loop / L.pitch), plates = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), MAT.rail, 4 * n), rollers = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.11, 0.11, 0.3, 10).rotateX(Math.PI / 2), MAT.steel, 2 * n);
+    for (const im of [plates, rollers]) { im.frustumCulled = false; G.scene.add(im); }
+    // the line shaft that drives it, from the same mitre wheel on the idler as the winding gear's, and its two belt pulleys
+    const len = FLOOR.h2.z - belts[0] + 0.7, shaft = new Spinner(A1, dB); shaft.k = h2.k;
+    const rodG = cyl(0.2, 0.6, len); rodG.userData.shaft = true;
+    const rodM = new THREE.Mesh(rodG, MAT.steel); rodM.userData.shaft = true; shaft.group.add(rodM);
+    const mit = new THREE.Mesh(bevelGeometry(18, 1.0, 0.5, Math.PI / 4), MAT.steel); mit.rotation.x = Math.PI; shaft.group.add(mit);
+    for (const z of belts) shaft.group.add(new THREE.Mesh(cyl(L.pulley, FLOOR.h2.z - z - 0.25, FLOOR.h2.z - z + 0.25), MAT.iron));
+    meshBevels(h2, DOWN, shaft, dB, TAU / 18);
+    solidCyl(new THREE.Vector3(A1.x, A1.y, A1.z - 1.9), new THREE.Vector3(A1.x, A1.y, A1.z - len), 0.22); solidCyl(new THREE.Vector3(A1.x, A1.y, A1.z - 0.5), new THREE.Vector3(A1.x, A1.y, A1.z - 1.9), 1.15);
+    spinners.push(shaft);
+    WINDGEAR.shafts.push({ A1: A1.toArray(), d: dB.toArray(), kg: cylinderMass(0.2, len) + 14e3, bearings: [2.5, 11, 20, 29, 38, len - 9.4, len - 3.9], load: 0.15 });       // (the last is between the two pulleys)
+    // crossed belts, which turn the wheels the opposite way to the shaft: the way that takes the near side up
+    G.tag = 'bearing';
+    for (const z of belts) for (const sg of [-1, 1]) beam('rail', [A1.x, A1.y + sg * L.pulley, z + sg * 0.07], [xm, L.yb - sg * pulleyR, z + sg * 0.07], 0.03, 0.4);
+    G.tag = '';
+    const speed = Math.abs(shaft.k) * L.pulley / pulleyR * R3;       // metres a second, at the engine's governed speed
+    const _lp = new THREE.Vector3(), _lt = new THREE.Vector3(), _lm = new THREE.Matrix4(), _lq = new THREE.Quaternion(), _l1 = new THREE.Vector3(1, 1, 1), _l2 = new THREE.Vector3();
+    LIFTGEAR.car = platforms[0].mesh; LIFTGEAR.loop = loop; LIFTGEAR.at = (d, out) => { at(d, out); out.y -= L.hang; out.z = L.z; return out; };
+    placeLifts = (dt) => {
+      const d0 = speed * s.floorA;
+      platforms.forEach((mv, i) => {
+        at(d0 + i * loop / L.cars, _lp); _lp.y -= L.hang; _lp.z = L.z;
+        if (dt) mv.set(_lp, dt); else { mv.pos.copy(_lp); mv.mesh.position.copy(_lp); mv.body.setTranslation(_lp, true); }
+      });
+      for (const w of wheels) w.set(-d0 / R3 + Math.PI / L.teeth);              // a gap between teeth under every roller
+      let k = 0, r = 0;
+      for (const z of zs) for (let j = 0; j < n; j++) {
+        at(d0 + j * L.pitch, _lp); at(d0 + (j + 1) * L.pitch, _lt);
+        _lq.setFromAxisAngle(ZAXIS, Math.atan2(_lt.y - _lp.y, _lt.x - _lp.x)); _l2.set(_lp.distanceTo(_lt) + 0.24, 0.2, 0.035);
+        _lt.add(_lp).multiplyScalar(0.5);
+        for (const sg of [-1, 1]) { _lt.z = z + sg * (j % 2 ? 0.125 : 0.085); plates.setMatrixAt(k++, _lm.compose(_lt, _lq, _l2)); }
+        _lp.z = z; rollers.setMatrixAt(r++, _lm.compose(_lp, _lq, _l1));
+      }
+      plates.instanceMatrix.needsUpdate = true; rollers.instanceMatrix.needsUpdate = true;
+    };
   }
 
   // ------------------------------------------------------------ simulation
-  const TH0 = PEND.theta0, REL = PEND.thetaRel, STEP = 6 * DEG, DROP = 0.45, RECOIL = 1.0 * DEG, DAMP = 0.004, LIFT_T = 6;
+  const MU = 0.003;                                  // friction of a journal in its bearing: roller bearings (plain ones, at these loads and this slowly, would stall the clock)
+  // One step of the pendulum and the two arms. An arm is 'up' (held up by a pin, the wheel locked on its stop),
+  // 'ride' (resting on the pendulum) or 'low' (set down on the next pin). Returns 1 or -1 when the pendulum takes
+  // the right or left arm off its pin, which is what unlocks the wheel.
+  const stepPendulum = (p, len, dt) => {
+    p.om += (-(GRAV / len) * Math.sin(p.th) - AIR * p.om - (p.R === 'ride' ? ARM : 0) + (p.L === 'ride' ? ARM : 0)) * dt;
+    p.th += p.om * dt;
+    let ev = 0;
+    if (p.R === 'up' && p.th >= G_UP) { p.R = 'ride'; ev = 1; }
+    if (p.R === 'ride') { if (p.th <= G_LOW) { p.R = 'low'; p.aR = G_LOW; } else p.aR = p.th; }
+    if (p.L === 'up' && -p.th >= G_UP) { p.L = 'ride'; ev = -1; }
+    if (p.L === 'ride') { if (-p.th <= G_LOW) { p.L = 'low'; p.aL = G_LOW; } else p.aL = -p.th; }
+    return ev;
+  };
+  // Rating. The arms hurry the pendulum a little and its arc slows it a little, so its length is found by trial,
+  // as a clockmaker finds it with the rating nut: run it, time it, adjust, until it beats ten seconds.
+  const beatOf = (len) => {
+    const p = { th: -TH0, om: 0, R: 'up', L: 'ride', aR: G_UP, aL: TH0 }, dt = 1 / 60;
+    let first = 0, last = 0, count = 0;
+    for (let i = 1; i <= 60 * 250; i++) {
+      const ev = stepPendulum(p, len, dt);
+      if (!ev) continue;
+      if (ev > 0) { p.L = 'up'; p.aL = G_UP; } else { p.R = 'up'; p.aR = G_UP; }
+      if (!count++) first = i * dt; else last = i * dt;
+    }
+    return (last - first) / (count - 1);
+  };
+  let Leff = L;
+  for (let k = 0, l0 = L, b0 = beatOf(L); k < 6; k++) { const l1 = l0 * (10 / b0) ** 2, b1 = beatOf(l1); Leff = l1; if (Math.abs(b1 - 10) < 2e-4) break; l0 = l1; b0 = b1; }
   const beatsNow = () => { const d = new Date(); return Math.floor(((d.getHours() % 12) * 3600 + d.getMinutes() * 60 + d.getSeconds()) / 10); };
-  const s = { n: beatsNow(), th: 0, om: 0, dropT: 10, landed: true, liftT: -1, liftShift: 0, floorA: 0, floorRate: 1 };   // n: beats since 12:00; floorRate: set by the steam engine
-  const rest = () => { s.th = (s.n % 2 === 0 ? -1 : 1) * TH0 * 0.999; s.om = 0; s.dropT = 10; s.landed = true; };  // even count: resting on the right-hand pallet
+  const s = { n: beatsNow(), th: 0, om: 0, R: 'up', L: 'ride', aR: G_UP, aL: TH0, lift: 'L', dropT: 10, landed: true, phi: 0, rate: 0.1, floorA: 0, floorRate: 1,
+    weightTop: WIND.top, winding: false, barrelA: 0, aPrev: 0, clutch: 0 };   // n: beats since 12:00; floorRate: set by the steam engine
+  // At an even count the wheel is locked on the right-hand arm, which a pin holds up, and the pendulum is away to the
+  // left with the left-hand arm resting on it; at an odd count, the other way about.
+  const rest = () => {
+    const right = s.n % 2 !== 0;
+    s.th = (right ? 1 : -1) * TH0; s.om = 0; s.dropT = 10; s.landed = true;
+    s.R = right ? 'ride' : 'up'; s.aR = right ? TH0 : G_UP; s.L = right ? 'up' : 'ride'; s.aL = right ? G_UP : TH0;
+  };
   rest();
-  const _lp = new THREE.Vector3();
-
-  function alpha() {
-    const e = Math.min(1, s.dropT / DROP);
-    const rec = s.landed ? RECOIL * Math.max(0, Math.abs(s.th) - REL) / (TH0 - REL) : 0;
-    return (s.n - 1 + e * e) * STEP - rec;
-  }
-  function tick() {
-    s.n++; s.dropT = 0; s.landed = false;
-    // impulse: the escape wheel gives back exactly the energy the swing has lost
-    const E = 0.5 * s.om * s.om + (GRAV / L) * (1 - Math.cos(s.th)), Et = (GRAV / L) * (1 - Math.cos(TH0));
-    if (E < Et) s.om = Math.sign(s.om) * Math.sqrt(s.om * s.om + 2 * (Et - E));
+  // How far the escape wheel has got through its sixth of a turn. Nothing drives it but the remontoire's weight,
+  // against its own inertia: it gathers speed steadily and is stopped dead by the next leg meeting the other stop.
+  const turned = () => s.landed ? 1 : Math.min(1, (s.dropT / TURN) ** 2);
+  const escaped = () => s.n - 1 + turned();                // beats the escape wheel has let go, counting part-turns
+  // The train does not stop and start: 60,000 t of wheels could not. It turns all the time, held back by its
+  // brake. What the escape wheel has let go and what the train has delivered differ by the angle of the
+  // remontoire's arm, and the arm sets the brake: if the train gets ahead the arm rises and the brake bites
+  // harder, if it falls behind the brake eases. The train so follows the escapement on average, never beat by beat.
+  const LAG = 0.7, alpha = () => (s.phi + LAG) * STEP;
+  function tick(ev) {
+    s.n++; s.dropT = 0; s.landed = false; s.lift = ev > 0 ? 'L' : 'R';      // the arm on the other side is the one the wheel now lifts
     emit('release', s.n);
   }
-  function placeLifts(dt) {
-    const u = s.liftT < 0 ? 0 : Math.min(1, s.liftT / LIFT_T), e = (1 - Math.cos(Math.PI * u)) / 2, N = stations.length;
-    for (let i = 0; i < N; i++) {
-      _lp.lerpVectors(stations[(i + s.liftShift) % N], stations[(i + s.liftShift + 1) % N], e);
-      if (dt) platforms[i].set(_lp, dt); else { platforms[i].pos.copy(_lp); platforms[i].mesh.position.copy(_lp); platforms[i].body.setTranslation(_lp, true); }
-    }
-  }
 
-  const setTrain = () => { pen.init(s.th); const a = alpha(); for (const r of train) r.init(r.k * a + r.c); };
+  const setTrain = () => {
+    pen.init(s.th); s.phi = escaped() - LAG; s.rate = 0.1;
+    const a = alpha(); s.aPrev = a;
+    for (const r of train) r.init(r.k * a + r.c);
+    rE.init(escaped() * STEP);
+  };
   setTrain();
+  {
+    // Where the weight is now, by the wall clock: it falls for about half an hour and is wound up in about five minutes.
+    const fallT = WIND.band / fall, windT = WIND.band / windSpeed, t0 = (Date.now() / 1000) % (fallT + windT);
+    s.winding = t0 >= fallT; s.clutch = s.winding ? 1 : 0;
+    s.weightTop = s.winding ? WIND.top - WIND.band + windSpeed * (t0 - fallT) : WIND.top - fall * t0;
+    s.barrelA = rGreat.angle; rBarrel.init(s.barrelA); rWind.init(rWind.c);
+    trip.rotation.z = -Math.PI / 2 - (s.barrelA - (WIND.top - s.weightTop) / WIND.barrelR);          // one arm hangs straight down when the weight is at the top, the other when it is due for winding
+    placeWeight(0);
+  }
   for (const r of floorRotors) r.init(r.c);
   placeLifts(0);
 
   function update(dt) {
-    // pendulum: theta'' = -(g/L) sin(theta), semi-implicit Euler
-    s.om += (-(GRAV / L) * Math.sin(s.th) - DAMP * s.om) * dt;
-    const prev = s.th; s.th += s.om * dt;
-    if ((prev < REL && s.th >= REL) || (prev > -REL && s.th <= -REL)) tick();
+    const ev = stepPendulum(s, Leff, dt);
+    if (ev) tick(ev);
     s.dropT += dt;
-    if (!s.landed && s.dropT >= DROP) {
-      s.landed = true; emit('impact', s.n);
-      if (s.liftT < 0) s.liftT = 0;
-      if (s.n % 360 === 0) emit('hour', (s.n / 360) % 12 || 12); else if (s.n % 360 === 180) emit('half');
+    if (!s.landed) {
+      // a lifting pin pushes the set-down arm's pallet outward as the wheel turns
+      const lifted = G_LOW + (G_UP - G_LOW) * (Math.cos(STEP * (1 - turned())) - 0.5) / 0.5;
+      if (s.lift === 'L') { s.L = 'lift'; s.aL = lifted; } else { s.R = 'lift'; s.aR = lifted; }
+      if (s.dropT >= TURN) {
+        s.landed = true; if (s.lift === 'L') { s.L = 'up'; s.aL = G_UP; } else { s.R = 'up'; s.aR = G_UP; }
+        emit('impact', s.n);
+        if (s.n % 360 === 0) emit('hour', (s.n / 360) % 12 || 12); else if (s.n % 360 === 180) emit('half');
+      }
     }
-    pen.set(s.th, dt);
-    const a = alpha();
+    pen.set(s.th, dt); spring.rotation.z = -s.th / 2;                 // (the leaves bend: their chord turns half as far as the rod)
+    armR.rotation.z = s.aR - G_UP; armL.rotation.z = G_UP - s.aL;
+    // the train: its speed answers slowly to the brake, and the brake to how far it lags the escapement
+    const lag = escaped() - s.phi;
+    s.rate += (0.1 * (1 + 0.5 * (lag - LAG)) - s.rate) * dt / 20; s.phi += s.rate * dt;
+    const a = alpha(), esc = escaped() * STEP;
     for (const r of train) r.set(r.k * a + r.c, dt);
+    rE.set(esc, dt);
+    const spiderA = (rEsc.angle + esc) / 2, spin = (rEsc.angle - esc) / 2;      // the differential: its arm turns by half the sum, its planet wheels by half the difference
+    spider.set(spiderA); planets[0].rotation.z = spin; planets[1].rotation.z = -spin;
     s.floorA += dt * s.floorRate;
     for (const r of floorRotors) r.set(r.k * s.floorA + r.c, dt);
-    if (s.liftT >= 0) { s.liftT += dt; if (s.liftT >= LIFT_T) { s.liftT = -1; s.liftShift = (s.liftShift + 1) % stations.length; } }
     placeLifts(dt);
+    // The driving weight. Out of clutch the barrel goes round with the great wheel, through the ratchet, and
+    // the weight comes down; in clutch it goes round with the winding wheel instead, and the weight comes up.
+    const dG = rGreat.k * (a - s.aPrev); s.aPrev = a;
+    if (s.weightTop <= WIND.top - WIND.band) s.winding = true; else if (s.weightTop >= WIND.top) s.winding = false;
+    const dB = s.winding ? rWind.k * dt * s.floorRate : dG;
+    s.barrelA += dB; s.weightTop = Math.min(WIND.top, Math.max(WIND.bottom, s.weightTop - WIND.barrelR * dB));
+    s.clutch += Math.max(-dt * 1.5, Math.min(dt * 1.5, (s.winding ? 1 : 0) - s.clutch));
+    rBarrel.set(s.barrelA, dt); rWind.set(rWind.k * s.floorA + rWind.c, dt);
+    for (const sp of spinners) sp.set(sp.k * s.floorA + sp.c);
+    placeWeight(dt);
   }
+
+  // The power budget. The weight's fall is all the power the going train has; it is spent turning 84,000 t of
+  // wheels in their bearings, keeping the pendulum swinging, and in the teeth.
+  POWER.budget = () => {
+    const rate = STEP / 10, kgOn = (name) => assembly(`arbor ${name}`).masses.reduce((t, q) => t + q.kg, 0) + cylinderMass(SHAFT[name].r, SHAFT[name].z[1] - SHAFT[name].z[0], MATERIAL.alloy);
+    const turns = { esc: Math.abs(rEsc.k), third: Math.abs(rThird.k), center: Math.abs(rCenter.k), great: Math.abs(rGreat.k), minute: Math.abs(rMinute.k) };
+    let journals = 0;
+    for (const [name, k] of Object.entries(turns)) journals += MU * kgOn(name) * GRAV * SHAFT[name].r * k * rate;
+    const arms = liftJ / 10, remontoire = REM * liftJ / 10;             // lifting an arm, once a beat, is all that reaches the pendulum; the remontoire is wound with three times that
+    const supply = weightKg * GRAV * fall, teeth = 0.09 * supply;       // three meshes between the weight and the last arbor, 3 % each
+    return { supply, journals, arms, remontoire, teeth, need: journals + remontoire + teeth, mu: MU, Q, length: Leff, armKg, turn: TURN, weightKg, remKg: 2 * REM * liftJ / STEP / GRAV / 4.5 };
+  };
 
   return {
     update, state: s,
+    windTorque: weightKg * GRAV * windSpeed / WIND.efficiency / 1.2,          // what the winding gear asks of the engine's crank at its governed speed, N m
     floor: floorRotors,          // [great wheel, idler, flywheel pinion]: driven by the steam engine
     // Is a body at p down among the teeth where two floor wheels mesh? Nothing comes out of there.
     caught(p) {
@@ -378,6 +868,7 @@ export function buildClockwork() {
     resync() { let d = Math.abs(beatsNow() - s.n); d = Math.min(d, 4320 - d); if (d > 3) { s.n = beatsNow(); rest(); setTrain(); } },
     on(name, fn) { listeners[name].push(fn); },
     seconds() { return s.n * 10; },
-    escapement: new THREE.Vector3(0, ESC.y + 10, ESC.z),
+    escapement: new THREE.Vector3(0, ESC.y, GESC.zWheel),
+    parts: { wheel: rE.group, arms: [armR, armL] },      // for the test that watches the escapement's moving parts meet
   };
 }

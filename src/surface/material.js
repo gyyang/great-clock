@@ -17,13 +17,37 @@ varying vec3 vSfP; varying vec3 vSfN;
 varying vec3 vSfL; varying vec3 vSfS;      // instanced boxes: where on the unit box, and the box's size in metres
 attribute vec3 sfBevel;       // chamfered boxes only: which way each corner vertex pulls back (kit.js)
 uniform float sfBevelR;       // chamfer width, metres
+uniform float sfPixel;        // how many metres one pixel covers, per metre of distance
 `;
+// A rod thinner than a pixel is drawn in fragments: a dashed line where there is a rail, a hanger or a
+// distant column. Whatever is thin to begin with is therefore never drawn thinner than about a pixel.
+export const PIXEL = { value: 0.001 };
+const THIN = /* glsl */`
+  #ifdef USE_INSTANCING
+  {
+    vec3 sfT = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
+    float sfWant = -(modelViewMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).z * sfPixel * 1.1;
+    transformed *= mix(vec3(1.0), max(vec3(1.0), sfWant / sfT), step(sfT, vec3(0.3)));
+  }
+  #endif
+`;
+// The same for a plain material that is used for instanced parts.
+export function keepVisible(mat) {
+  if (mat.userData.surface || mat.userData.thin || mat.onBeforeCompile !== THREE.Material.prototype.onBeforeCompile) return;
+  mat.userData.thin = true;
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.sfPixel = PIXEL;
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nuniform float sfPixel;').replace('#include <begin_vertex>', '#include <begin_vertex>\n' + THIN);
+  };
+  mat.customProgramCacheKey = () => 'thin';
+}
 const VERT = /* glsl */`
 {
   #ifdef USE_INSTANCING
     vec3 sfS = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
     transformed -= sfBevel * min(sfBevelR, 0.25 * min(sfS.x, min(sfS.y, sfS.z))) / sfS;
   #endif
+` + THIN + /* glsl */`
   vec4 sfP = vec4(transformed, 1.0); vec3 sfN = objectNormal;
   vSfL = position; vSfS = vec3(0.0);
   #ifdef USE_INSTANCING
@@ -219,6 +243,7 @@ export function surface(name, { p, seed, macro = [0.14, 0.1, 0.8, 0.2], wall = n
     sfWeatherCol: { value: new THREE.Color(weatherColor) },
     sfLining: { value: new THREE.Color(lining || 0) },
     sfBevelR: { value: bevel },
+    sfPixel: PIXEL,
   };
   const flags = { SF_TINT: set.tint, SF_WALL: !!wall, SF_WEATHER: !!weather, SF_BREAK: set.grain, SF_BRICK: name === 'brick', SF_LINING: lining !== null };
   mat.defines = Object.fromEntries(Object.entries(flags).filter(([, on]) => on).map(([k]) => [k, '']));

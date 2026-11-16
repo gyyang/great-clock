@@ -8,7 +8,7 @@
 // which carry the lit windows, and roofs) plus one instanced mesh of lamps.
 import * as THREE from 'three';
 import { G, MAT, mulberry32, cbox } from '../kit.js';
-import { TOWER } from '../layout.js';
+import { TOWER, STACK } from '../layout.js';
 
 const RADIUS = 1150;                    // the haze has swallowed everything by here
 const BLOCK = [84, 118], STREET = 13;   // a block and the street round it, metres
@@ -19,13 +19,14 @@ const PLAIN_UV = [0.02, 0.98];          // a spot on the facade texture with no 
 export function buildCity() {
   const rand = mulberry32(1887), R = (a, b) => a + (b - a) * rand(), pick = (a) => a[Math.floor(rand() * a.length)];
   const walls = { p: [], n: [], uv: [], c: [] }, roofs = { p: [], n: [], uv: null, c: [] };
-  const lamps = [];
-  let cs = 1, sn = 0, tx = 0, tz = 0, inside = [0, 0, 0], colliders = 0;
+  const lamps = [], blocks = [];
+  let cs = 1, sn = 0, tx = 0, tz = 0, inside = [0, 0, 0], colliders = 0, dry = false;      // dry: draw nothing (but use up the same random numbers)
 
   // ---- geometry: everything is emitted in world space, in the current block's frame
   const P = (x, y, z) => [tx + x * cs - z * sn, y, tz + x * sn + z * cs];
   const a3 = new THREE.Vector3(), b3 = new THREE.Vector3(), c3 = new THREE.Vector3(), n3 = new THREE.Vector3();
   function tri(t, a, b, c, col, ua, ub, uc) {
+    if (dry) return;
     a3.fromArray(a); b3.fromArray(b); c3.fromArray(c);
     n3.copy(b3).sub(a3).cross(c3.sub(a3));
     if (n3.lengthSq() < 1e-10) return;
@@ -85,8 +86,9 @@ export function buildCity() {
       if (cap) tri(roofs, p(r1, a, y1), p(r1, b, y1), P(cx, y1 + (cap.rise || 0), cz), cap.col);
     }
   }
-  const lamp = (x, z, y = 5.2) => { const w = P(x, y, z); lamps.push(w); };
+  const lamp = (x, z, y = 5.2) => { if (dry) return; const w = P(x, y, z); lamps.push(w); };
   const solid = (x0, x1, z0, z1, h) => {
+    if (dry) return;
     const c = P((x0 + x1) / 2, h / 2, (z0 + z1) / 2);
     if (Math.hypot(c[0], c[2]) > 520 || colliders > 700) return;
     colliders++;
@@ -186,6 +188,18 @@ export function buildCity() {
     for (const sx of [-1, 1]) for (const sz of [-1, 1]) lamp(sx * (hw + 4), sz * (hd + 4), 6);
   }
 
+  // The stack's yard (the stack itself: facade.js). The block is given up to it: a yard of setts inside a brick wall,
+  // with a gate onto the street the flue comes along, and the gatekeeper's lodge beside it. (sx, sz): the stack, here.
+  function stackYard(w, d, sx, sz) {
+    const col = shade(BRICK[0], 0.9), hw = 2.6, gate = [sz - 5, sz + 5];
+    quad(roofs, P(-w / 2 + 0.6, 0.27, -d / 2 + 0.6), P(w / 2 - 0.6, 0.27, -d / 2 + 0.6), P(w / 2 - 0.6, 0.27, d / 2 - 0.6), P(-w / 2 + 0.6, 0.27, d / 2 - 0.6), shade(PAVE, 1.3));
+    const run = (x0, x1, z0, z1) => { box(x0, x1, z0, z1, 0.2, hw, col, { windows: false, top: shade(STONE, 0.6) }); solid(x0, x1, z0, z1, hw); };
+    run(-w / 2, w / 2, -d / 2, -d / 2 + 0.5); run(-w / 2, w / 2, d / 2 - 0.5, d / 2); run(-w / 2, -w / 2 + 0.5, -d / 2, d / 2);
+    run(w / 2 - 0.5, w / 2, -d / 2, gate[0]); run(w / 2 - 0.5, w / 2, gate[1], d / 2);
+    box(w / 2 - 7, w / 2 - 1, gate[1] + 2, gate[1] + 8, 0.2, 5.5, col, { top: null }); gable(w / 2 - 7, w / 2 - 1, gate[1] + 2, gate[1] + 8, 5.5, 2.2, SLATE[0], col); solid(w / 2 - 7, w / 2 - 1, gate[1] + 2, gate[1] + 8, 5.5);
+    for (const z of gate) lamp(w / 2 + 1.6, z);
+  }
+
   function square(w, d) {
     quad(roofs, P(-w / 2 + 6, 0.32, -d / 2 + 6), P(w / 2 - 6, 0.32, -d / 2 + 6), P(w / 2 - 6, 0.32, d / 2 - 6), P(-w / 2 + 6, 0.32, d / 2 - 6), GRASS);
     box(-2.2, 2.2, -2.2, 2.2, 0.2, 3.5, shade(STONE, 0.8), { windows: false, top: shade(STONE, 0.5) });
@@ -215,15 +229,21 @@ export function buildCity() {
       const k = [1, 0.74, 0.52].find(fits);
       if (!k) continue;
       const w = w0 * k, d = d0 * k, far = dc > 620, roll = rand(), big = k === 1;
+      blocks.push({ x: tx, z: tz, a: dist.a, w, d, roll: +roll.toFixed(2), big });
       inside = P(0, -5, 0);
       quad(roofs, P(-w / 2 - 2.5, 0.2, -d / 2 - 2.5), P(w / 2 + 2.5, 0.2, -d / 2 - 2.5), P(w / 2 + 2.5, 0.2, d / 2 + 2.5), P(-w / 2 - 2.5, 0.2, d / 2 + 2.5), shade(PAVE, R(0.9, 1.1)));   // pavement
       quad(roofs, P(-w / 2 + 10, 0.26, -d / 2 + 10), P(w / 2 - 10, 0.26, -d / 2 + 10), P(w / 2 - 10, 0.26, d / 2 - 10), P(-w / 2 + 10, 0.26, d / 2 - 10), YARD);
+      // (the block the stack stands in is built dry, so that the rest of the town is as it would be, and given to the stack)
+      const lsx = (STACK.x - tx) * cs + (STACK.z - tz) * sn, lsz = -(STACK.x - tx) * sn + (STACK.z - tz) * cs, works = Math.abs(lsx) < w / 2 && Math.abs(lsz) < d / 2;
+      dry = works;
       if (roll < 0.66 || !big) { if (roll < 0.9) terraces(w, d, far, dist.rich); else square(w, d); }
       else if (roll < 0.8) mill(w, d, far);
       else if (roll < 0.86) gasworks(w, d);
       else if (roll < 0.91) church(w, d);
       else if (roll < 0.96) civic(w, d);
       else square(w, d);
+      dry = false;
+      if (works) stackYard(w, d, lsx, lsz);
       if (!far || rand() < 0.4) for (const sx of [-1, 1]) for (let z = -d / 2; z <= d / 2; z += 29) lamp(sx * (w / 2 + 1.6), z);
     }
   });
@@ -272,5 +292,5 @@ export function buildCity() {
   lamps.forEach((p, i) => { const r = 0.2 + Math.hypot(p[0], p[2]) * 0.0011; lm.setMatrixAt(i, m4.makeScale(r, r, r).setPosition(p[0], p[1], p[2])); });
   lm.frustumCulled = false; G.scene.add(lm);
 
-  return { triangles: (walls.p.length + roofs.p.length) / 9, lamps: lamps.length, colliders };
+  return { triangles: (walls.p.length + roofs.p.length) / 9, lamps: lamps.length, colliders, blocks };
 }

@@ -13,6 +13,9 @@ const REACH = 2.2;        // how close you must stand to use a control, m
 export function buildEngine(clock, scene) {
   const h3 = clock.floor[2], O = FLOOR.h3;
   const sim = new EngineSim(), model = buildEngineModel(h3), steam = new SteamCloud(scene);
+  // the boiler's smoke, out of the top of the stack behind the building: a coal fire, banked or drawing, never out. It
+  // drifts away from the building on the wind, which blows mostly off the river from the front right (the vanes: facade.js)
+  const smoke = new SteamCloud(scene, 700); smoke.material.uniforms.tint.value.setRGB(0.2, 0.19, 0.18);
   const pts = model.points;
   const listeners = { chuff: [], vent: [], whistle: [], regulator: [] };
   const emit = (name, arg) => listeners[name].forEach(fn => fn(arg));
@@ -31,6 +34,7 @@ export function buildEngine(clock, scene) {
   const _t = { x: O.x, y: E.axisY, z: 0 }, _q = { x: 0, y: 0, z: 0, w: 1 };
   function update(dt) {
     const a = crankAngle();
+    sim.extra = clock.state.winding ? clock.windTorque : 0;       // lifting the driving weight is work the engine has to do
     sim.step(dt, a);
     clock.state.floorRate = sim.w / NOMINAL;
     const r = rodPose(a);                                  // the rod is a solid, moving body
@@ -61,7 +65,8 @@ export function buildEngine(clock, scene) {
   }
   function vent(dt) {
     if (puff > 0) {
-      for (let i = 0; i < 26; i++) steam.emit(pts.exhaust, [0, 4 + 6 * puff * Math.random(), 0], { spread: 1.5, life: 5.5, s0: 1.0, s1: 5.5, alpha: 0.4 * puff });
+      // each exhaust beat comes out of the stack's top, with the smoke (the blast livens the fire's draught, as a locomotive's does)
+      for (let i = 0; i < 18; i++) steam.emit(pts.exhaust, [-1.1, 5 + 6 * puff * Math.random(), -1.1], { spread: 2.0, life: 9, s0: 3.0, s1: 16, alpha: 0.4 * puff });
       puff = 0;
     }
     const live = sim.throttle > 0;
@@ -73,7 +78,8 @@ export function buildEngine(clock, scene) {
       whistleT -= dt;
       trickle('whistle', 60, dt, () => steam.emit(pts.whistle, [0, 5, 0], { spread: 2.2, life: 1.4, s0: 0.2, s1: 2.4, alpha: 0.3 }));
     }
-    steam.update(dt, scene.fog);
+    trickle('smoke', live ? 7 : 3, dt, () => smoke.emit(pts.exhaust, [-1.6, 3.5 + Math.random() * 2, -1.6], { spread: 1.4, life: 30, s0: 4, s1: 34, alpha: live ? 0.32 : 0.2 }));
+    steam.update(dt, scene.fog); smoke.update(dt, scene.fog);
   }
   function frame(dt) { pose(dt); vent(dt); }
 
