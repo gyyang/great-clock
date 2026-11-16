@@ -56,7 +56,7 @@ export function surfaceSet(name, { p = [0, 0, 0, 0], seed = 0 } = {}) {
   pass(NORMAL, { tH: { value: scratch.textures[2] }, uPx: { value: new THREE.Vector2(1 / size, 1 / size) }, uK: { value: new THREE.Vector2(k(0), k(1)) } }, normal);
   scratch.dispose();
 
-  const set = { name, albedo: albedo.texture, orm: orm.texture, normal: normal.texture, tile: R.tile, tint: !!R.tint, size };
+  const set = { name, albedo: albedo.texture, orm: orm.texture, normal: normal.texture, tile: R.tile, tint: !!R.tint, grain: !!R.grain, size };
   cache.set(key, set);
   return set;
 }

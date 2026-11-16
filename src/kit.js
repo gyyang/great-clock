@@ -220,18 +220,24 @@ function makeTextures() {
 function makeMaterials() {
   const S = (o) => new THREE.MeshStandardMaterial(o), v2 = (a) => new THREE.Vector2(a, a);
   // Generated surfaces (see surface/): colour is the tint of the metal or the paint.
-  const tarnish = [0.62, 0.5, 0.4, 0.55];                           // brass going brown where nobody polishes it
-  MAT.brass = surface('brass', { color: 0xcfa650, age: tarnish, macro: [0.1, 0.1, 0.35, 0.2] });
-  MAT.bronze = surface('brass', { color: 0x8f6c38, roughness: 1.2, p: [0.35, 0, 0, 0], seed: 1, age: tarnish, macro: [0.12, 0.1, 0.5, 0.25] });
-  MAT.copper = surface('brass', { color: 0xc46a3c, p: [0.15, 0, 0, 0], seed: 2, age: [0.55, 0.6, 0.52, 0.45], macro: [0.1, 0.1, 0.12, 0.25] });
-  MAT.steel = surface('steel', { color: 0x9aa0a8, age: [0.55, 0.45, 0.38, 0.5] });
-  MAT.iron = surface('iron', { color: 0x30343a, age: [0.8, 0.7, 0.6, 0.35], macro: [0.1, 0.08, 0.5, 0.2] });
-  MAT.rail = surface('iron', { color: 0x222428, roughness: 0.85, seed: 1 });
-  MAT.rivet = surface('brass', { color: 0x8a6f40, p: [0.3, 0, 0, 0], seed: 3 });
-  MAT.handrail = surface('brass', { color: 0xc9983f, roughness: 0.8, p: [-0.4, 0, 0, 0], seed: 4 });       // polished by hands
-  MAT.brick = surface('brick', { macro: [0.22, 0.08, 0.22, 0.3], wall: [0.4, 2.5, 0.5, 0.45], age: [0.5, 0.5, 0.52, 0.8] });
-  MAT.stone = surface('stone', { macro: [0.18, 0.08, 0.3, 0.3], wall: [0.5, 1.5, 0, 0] });
-  MAT.plate = surface('plate', { macro: [0.2, 0.14, 0.12, 0.5], age: [0.6, 0.5, 0.42, 0.6] });
+  // Colour is the tint of the metal or the paint. This is a clock that is looked after:
+  // the castings are enamelled and lined, the brass is dull rather than tarnished, and
+  // nothing is rusting. `age` is the slow dulling that comes in patches metres across;
+  // `weather` (corrosion that breaks out in spots and runs down) is there for a part that
+  // should look neglected, and nothing here uses it.
+  const dull = [0.8, 0.72, 0.62, 0.22];                           // brass a season after its last polish
+  MAT.brass = surface('brass', { color: 0xcfa650, age: dull, macro: [0.06, 0.08, 0.35, 0.1] });
+  MAT.bronze = surface('brass', { color: 0x8f6c38, roughness: 1.2, p: [0.5, 0, 0, 0], seed: 1, age: dull, macro: [0.07, 0.08, 0.5, 0.12] });
+  MAT.copper = surface('brass', { color: 0xc46a3c, p: [0.2, 0, 0, 0], seed: 2, age: [0.78, 0.72, 0.66, 0.2], macro: [0.06, 0.08, 0.12, 0.12] });
+  MAT.steel = surface('steel', { color: 0x9aa0a8, age: [0.82, 0.78, 0.74, 0.15], macro: [0.06, 0.08, 0.6, 0.1] });
+  // cast iron in the works' green enamel with gold lining; railings and small fittings in black
+  MAT.iron = surface('iron', { color: 0x1f5245, roughness: 0.8, lining: 0xc9a24a, age: [0.85, 0.85, 0.82, 0.12], macro: [0.06, 0.06, 0.5, 0.1] });
+  MAT.rail = surface('iron', { color: 0x17191c, roughness: 0.75, seed: 1, macro: [0.05, 0.06, 0.8, 0.08] });
+  MAT.rivet = surface('brass', { color: 0x8a6f40, p: [0.5, 0, 0, 0], seed: 3 });
+  MAT.handrail = surface('brass', { color: 0xc9983f, roughness: 0.8, seed: 4, macro: [0.05, 0.06, 0.8, 0.05] });       // polished by hands
+  MAT.brick = surface('brick', { macro: [0.14, 0.06, 0.22, 0.12], wall: [0.1, 1.2, 0.35, 0.18], age: [0.75, 0.75, 0.76, 0.3] });
+  MAT.stone = surface('stone', { macro: [0.12, 0.06, 0.3, 0.12], wall: [0.15, 0.8, 0, 0] });
+  MAT.plate = surface('plate', { macro: [0.12, 0.12, 0.13, 0.4], age: [0.8, 0.76, 0.72, 0.2] });
   MAT.grate = S({ map: TEX.grate, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.5, metalness: 0.85 });
   MAT.lattice = S({ map: TEX.lattice, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.5, metalness: 0.8 });
   MAT.turntable = S({ map: TEX.turntable, metalness: 0.9, roughness: 0.5, normalMap: TEX.micro, normalScale: v2(0.3) });

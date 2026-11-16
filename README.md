@@ -40,7 +40,8 @@ Then open the URL it prints.
 
 There are no image, model or sound files: everything is generated when the page loads.
 
-- **Surfaces** – each material is a small program (`src/surface/recipes.js`) run once on the graphics card: real-size bricks with their own colour and height, lime mortar, soot; cast iron with chipped paint and rust weeping from the chips; brass that is bright where it is handled and brown where it is not. They are laid onto every part in true metres, so nothing stretches, and a second layer of variation in world space (water streaks, rising damp, rebuilt patches, soot under the roof) keeps a 240 m wall from looking like one tile repeated.
+- **Surfaces** – each material is a small program (`src/surface/recipes.js`) run once on the graphics card: real-size bricks on lime mortar, enamelled cast iron, brass with polishing scratches, bolted tread plate. They are laid onto every part in true metres, so nothing stretches. A tile holds only grain; anything you would recognise the second time is computed from where the point is on the part (`src/surface/material.js`): the firing of each individual brick, the dulling of brass in patches, damp at the foot of a wall. Nothing repeats.
+- **A clock that is looked after** – the castings are in green enamel with gold lining, as on a real tower-clock movement; the brass is dull rather than tarnished; nothing is rusting. (The materials can corrode: `weather` in `surface()` breaks out rust or verdigris in spots and runs it down upright faces. Nothing uses it.)
 - **Light shafts** – daylight through the dial is marched through the air against the same shadow map that lights the hall, so the beams carry the shadows of the hands, the tracery and every wheel they pass.
 - **Edges** – every box has a chamfer a centimetre wide that catches the light, whatever its size.
 - **Grade** – filmic tone curve, cool shadows and warm highlights, vignette and grain.
@@ -50,10 +51,10 @@ There are no image, model or sound files: everything is generated when the page 
 The regulator (key 7, then walk up to the lever) has four notches: shut, half, full, and full with the
 governor tied down. At half you can stand anywhere on the flywheel. With the governor tied down the
 engine runs away to about 16 rev/min and the flywheel will not keep you past a few metres from its centre.
-The three crates riding the flywheel stay put at the governed speed and are flung across the hall when it runs away.
+Push a crate onto the flywheel: it rides at the governed speed and is flung across the hall when the engine runs away.
 
-Stand at the rim of the great floor wheel and let a tooth catch you. Push a barrel into its teeth. Wait by
-the crate stack under the pendulum for the next swing.
+Stand at the rim of the great floor wheel and let a tooth catch you. Push a barrel into its teeth, or
+leave a crate where the pendulum's rating nut sweeps the floor.
 
 ## Layout
 
