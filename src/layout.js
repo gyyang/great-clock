@@ -41,6 +41,16 @@ export const ARBOR = {
   minute: { x: 20 * Math.cos(60 * DEG), y: DIAL.y + 20 * Math.sin(60 * DEG) },
 };
 
+// Each arbor: its radius, how far it runs in z, and the z of its two bearings.
+export const SHAFT = {
+  esc: { r: 1.1, z: [-3.6, 9], bearings: [1.6, 8.3] },
+  pivot: { r: 1.0, z: [-13.3, -0.8], bearings: [-12.6, -6.25] },
+  third: { r: 1.2, z: [2.5, 15.7], bearings: [3.2, 11.8] },
+  center: { r: 1.45, z: [12.3, 49.6], bearings: [18.3, 26] },       // the thickest: its wheels and the hands all overhang its bearings
+  great: { r: 1.4, z: [20.2, 31.2], bearings: [24.2, 30.5] },
+  minute: { r: 1.0, z: [27, 36], bearings: [27.8, 35.2] },
+};
+
 // Walkways
 export const STAIRS = { xa: -56, xb: -8, zA: -33.75, zB: -31.25, width: 2.3, pad: 4 };
 export const LIFT = { xu: 30, xd: 36, z: -33, hx: 2.4, hz: 2, top: 186, x0: 27.5, x1: 38.5, z0: -35, z1: -31 };

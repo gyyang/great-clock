@@ -5,7 +5,9 @@ import * as THREE from 'three';
 import { G, MAT, QX, ibox, icyl, sbox, deck, rail, stair, lamp } from '../kit.js';
 import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 import { spec, gearGeometry, escapeSpec, escapeOutline, extrude, planarUV, addGearColliders, addEscapeColliders, meshOffset, rivetRing, boltCircle } from './gears.js';
-import { DEG, GRAV, PEND, ESC, ARBOR, LAYER, DIAL, LEVELS, LIFT, FLOOR, TOWER } from '../layout.js';
+import { DEG, GRAV, PEND, ESC, ARBOR, LAYER, DIAL, LEVELS, LIFT, FLOOR, TOWER , SHAFT } from '../layout.js';
+import { assembly, SECTION, MATERIAL } from '../structure/model.js';
+import { wheelMass, cylinderMass } from '../structure/masses.js';
 
 const TAU = Math.PI * 2;
 const ZAXIS = new THREE.Vector3(0, 0, 1);
@@ -138,7 +140,7 @@ export function buildClockwork() {
       pen.addCollider(R.ColliderDesc.cuboid(len / 2, 0.8, 0.8).setTranslation((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, ESC.z)
         .setRotation({ x: 0, y: 0, z: Math.sin(ang / 2), w: Math.cos(ang / 2) }));
     }
-    mountArbor(pen, -13.3, -0.8, 1.0);
+    mountArbor(pen, ...SHAFT.pivot.z, SHAFT.pivot.r);
   }
 
   // ---- going train
@@ -163,13 +165,34 @@ export function buildClockwork() {
     rivetRing(m, (S.esc.rr + S.esc.rimIn) / 2, 40, S.esc.t / 2);
     boltCircle(m, S.esc.hubR * 0.7, 8, S.esc.t * 0.64, 0.26);
   }
-  mountGear(rEsc, S.escP, LAYER.A, MAT.steel); mountArbor(rEsc, -3.6, 9, 1.1);
-  mountGear(rThird, S.third, LAYER.A, MAT.brass); mountGear(rThird, S.thirdP, LAYER.B, MAT.steel); mountArbor(rThird, 2.5, 15.7, 1.2);
+  mountGear(rEsc, S.escP, LAYER.A, MAT.steel); mountArbor(rEsc, ...SHAFT.esc.z, SHAFT.esc.r);
+  mountGear(rThird, S.third, LAYER.A, MAT.brass); mountGear(rThird, S.thirdP, LAYER.B, MAT.steel); mountArbor(rThird, ...SHAFT.third.z, SHAFT.third.r);
   mountGear(rCenter, S.center, LAYER.B, MAT.brass); mountGear(rCenter, S.centerP, LAYER.C, MAT.steel);
-  mountGear(rCenter, S.cannon, LAYER.motionA, MAT.steel); mountArbor(rCenter, 12.3, 49.6, 1.3);
-  mountGear(rGreat, S.great, LAYER.C, MAT.brass); mountArbor(rGreat, 20.2, 31.2, 1.4);
-  mountGear(rMinute, S.minuteW, LAYER.motionA, MAT.brass); mountGear(rMinute, S.minuteP, LAYER.motionB, MAT.steel); mountArbor(rMinute, 27, 36, 1.0);
+  mountGear(rCenter, S.cannon, LAYER.motionA, MAT.steel); mountArbor(rCenter, ...SHAFT.center.z, SHAFT.center.r);
+  mountGear(rGreat, S.great, LAYER.C, MAT.brass); mountArbor(rGreat, ...SHAFT.great.z, SHAFT.great.r);
+  mountGear(rMinute, S.minuteW, LAYER.motionA, MAT.brass); mountGear(rMinute, S.minuteP, LAYER.motionB, MAT.steel); mountArbor(rMinute, ...SHAFT.minute.z, SHAFT.minute.r);
   mountGear(rHour, S.hourW, LAYER.motionB, MAT.brass);
+
+  // ---- what all this weighs, declared to the structural model (structure/model.js).
+  // Each arbor is a steel shaft carrying its wheels as loads, resting in its two bearings.
+  {
+    const st = MATERIAL.steel, bob = Math.PI * PEND.bobR ** 2 * 2.2 * MATERIAL.brass.rho, rods = 5 * cylinderMass(0.17, PEND.L - 9);
+    const on = {
+      esc: [[LAYER.esc, wheelMass(S.esc), 'escape wheel'], [LAYER.A, wheelMass(S.escP, st), 'escape pinion']],
+      pivot: [[PEND.z, bob + rods, 'pendulum'], [ESC.z, 64 * st.rho, 'anchor']],
+      third: [[LAYER.A, wheelMass(S.third), 'third wheel'], [LAYER.B, wheelMass(S.thirdP, st), 'third pinion']],
+      center: [[LAYER.B, wheelMass(S.center), 'centre wheel'], [LAYER.C, wheelMass(S.centerP, st), 'centre pinion'], [LAYER.motionA, wheelMass(S.cannon, st), 'cannon pinion'],
+        [LAYER.motionB, wheelMass(S.hourW), 'hour wheel'], [39.8, cylinderMass(2.1, 15.6, MATERIAL.brass, 1.55), 'hour pipe'], [47, 205 * MATERIAL.castIron.rho, 'hands']],
+      great: [[LAYER.C, wheelMass(S.great), 'great wheel'], [27, cylinderMass(5, 4, MATERIAL.brass, 3.5), 'barrel'], [27, cylinderMass(4.5, 16, MATERIAL.castIron), 'driving weight']],
+      minute: [[LAYER.motionA, wheelMass(S.minuteW), 'minute wheel'], [LAYER.motionB, wheelMass(S.minuteP, st), 'minute pinion']],
+    };
+    for (const [name, loads] of Object.entries(on)) {
+      const sh = SHAFT[name], a = ARBOR[name], A = assembly(`arbor ${name}`, 'alloy-steel shaft on two bearings');
+      A.member([a.x, a.y, sh.z[0]], [a.x, a.y, sh.z[1]], SECTION.round(sh.r), MATERIAL.alloy, 'beam', 'arbor');
+      for (const [z, kg, label] of loads) A.mass([a.x, a.y, z], kg, label);
+      for (const z of sh.bearings) A.rest([a.x, a.y, z], `girder ${name} ${z}`);
+    }
+  }
 
   // Escape wheel: tooth 0 sits at clock-angle (alpha + 11deg) from the top, turning clockwise seen from the dial side.
   rEsc.k = -1; rEsc.c = Math.PI / 2 - 11 * DEG;
@@ -205,7 +228,7 @@ export function buildClockwork() {
     };
     mk(rCenter, minuteShape, 48.6, 40.55, 56);
     mk(rHour, hourShape, 47, 40.7, 40);
-    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(1.9, 1.9, 15.6, 28).rotateX(Math.PI / 2), MAT.bronze); pipe.position.z = 39.8; rHour.group.add(pipe);
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.1, 15.6, 28).rotateX(Math.PI / 2), MAT.bronze); pipe.position.z = 39.8; rHour.group.add(pipe);
   }
 
   // ---- floor gears: always turning, shrouded so you can walk across the mesh

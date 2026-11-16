@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { createEnv } from './world/env.js';
 import { initKit, flushBatches, MAT } from './kit.js';
-import { buildTower, buildStructure } from './world/tower.js';
+import { buildTower } from './world/tower.js';
+import { buildStructure, structuralCheck } from './world/structure.js';
 import { buildCity } from './world/city.js';
 import { buildProps } from './world/props.js';
 import { buildClockwork } from './clock/clockwork.js';
@@ -176,7 +177,7 @@ async function main() {
   requestAnimationFrame(frame);
 
   // handy from the console
-  window.__game = { RAPIER, player, clock, engine, props, env, world, sound, go, SPOTS, city, structure,
+  window.__game = { RAPIER, player, clock, engine, props, env, world, sound, go, SPOTS, city, structure, check: structuralCheck,
     advance: (sec) => { for (let i = 0; i < sec / DT; i++) { clock.update(DT); engine.update(DT); props.step(); player.step(DT); world.step(); } }, look: (yaw, pitch) => { player.yaw = yaw; player.pitch = pitch; },
     // stand at p, look along (yaw, pitch) and draw one frame: for screenshots while the page is in the background
     shot: (p, yaw, pitch = 0) => {

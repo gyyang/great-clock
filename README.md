@@ -35,7 +35,6 @@ Then open the URL it prints.
 - **You** – a dynamic rigid body (Rapier). Your feet can only push with friction (μ·g), which is also all that holds you on a turning gear: stand too far out on the flywheel and it throws you. Falling has air drag (terminal ≈ 55 m/s).
 - **Lifts** – the paternoster platforms move one storey on every beat.
 - **Everything is solid** – every tooth of every wheel, the pendulum and its rating nut, the engine's crank and connecting rod are moving colliders. Stand in a tooth's way and it hits you at the speed it is travelling (about 5 m/s at the rim of the floor wheels). Go down between two meshing wheels and you do not come out.
-- **It stands up** – everything has a path to the ground, sized for its span. The wheels' arbors sit in pillow blocks on plate girders that bear on padstones in the side walls and, since nothing that shallow spans 140 m, hang every 8.75 m on tie rods from the roof purlins. The crossings are lattice girders (their parapets) hung the same way, or from an arbor girder where one runs overhead. Each flight of stairs rests every eight metres on a cantilever from the back wall, tied back from above low down and braced from below higher up. A rod is only placed where the line straight up from it is clear of every wheel: the builder casts rays through the physics world to check (`buildStructure` in `src/world/tower.js`).
 - **Loose things** – crates, barrels and brass shot are ordinary rigid bodies. Shove them, stack them, roll them into the teeth. The pendulum's nut knocks over whatever stands in its path; a turning wheel carries what stands on it for as long as friction can supply the centripetal force (μ·g) and throws it off beyond that.
 
 ### What you see
@@ -61,6 +60,38 @@ Push a crate onto the flywheel: it rides at the governed speed and is flung acro
 Stand at the rim of the great floor wheel and let a tooth catch you. Push a barrel into its teeth, or
 leave a crate where the pendulum's rating nut sweeps the floor.
 
+## Does it stand up?
+
+Yes, by calculation, and the game can check itself. As each part of the building is drawn it also declares what it
+is structurally: its members with their real sections and materials, the masses it carries, and what it rests on.
+`__game.check()` in the browser console then does an engineer's load take-down over the whole scene: it solves each
+assembly as a 3-D frame by the stiffness method (`src/structure/solve.js`), drops any tie that would have to push,
+checks every member for stress and buckling, and hands the reactions down to whatever carries that assembly, ending
+at the walls. It reports, per assembly, whether it holds, the member working hardest and by what factor, or the
+point at which it is attached to nothing. `npm test` checks the solver against textbook cases.
+
+The wheels are solid brass castings and weigh what that weighs: the great wheel 17,000 t, the going train about
+84,000 t with its arbors, pendulum and driving weight. Nothing of the 1890s carries that across a 140 m hall (run on
+a period structure, the check found tie rods overloaded 57 times and roof trusses over 100 times), so what carries
+the wheels is modern:
+
+- **Alloy steel** (450 MPa working stress) for everything that bends or is squeezed: arbors, girders, purlins, trusses.
+- **Carbon-fibre tendons** (1,100 MPa) for everything that hangs.
+- **Prestressed ultra-high-performance concrete** behind the brick facing of the shell (60 MPa).
+
+The structure is designed by the same analysis that checks it (`src/world/structure.js`). Each bearing sits on a
+plate girder; either side of it a tendon goes straight up to the roof, along a line found by casting rays through
+the physics world until one clears every wheel. Each tendon hangs from a box purlin of its own, the purlins sit on
+the roof trusses, and the trusses take it to the walls. The designer declares all that, runs the analysis, enlarges
+whatever is overworked and repeats until everything holds; only then is it drawn. So the sizes you see are the ones
+the loads asked for: the girder under the great wheel is 4 m deep and the one under the minute wheel 1.6 m, and the
+two roof trusses nearest the dial have rafters over 4 m deep where the one at the back has 0.9 m.
+
+In all, the walls carry about 135,000 t, of which 52,000 t is the structure itself.
+
+Not in the model yet: stairs, galleries, the lift cage, the pendulum landings and the ledge outside. The shell is
+checked by formula (compression at its foot, a vertical strip in the wind, bearing under the pads), not as a frame.
+
 ## Layout
 
 ```
@@ -77,11 +108,17 @@ src/
   player.js           the character's physics
   audio.js            all sound, synthesised
   world/
-    tower.js          the building: shell, galleries, stairs, bridges, the frame
+    tower.js          the building: shell, galleries, stairs, crossings
+    structure.js      the engineer: sizes girders, tendons and the roof by analysis, then draws them
     city.js           the town outside, generated from a seed
     props.js          loose crates, barrels and shot
     env.js            renderer, light, shadow, haze, sky
     post.js           ambient occlusion, light shafts, bloom, film grade
+  structure/
+    solve.js          3-D frame analysis by the direct stiffness method: numbers only
+    model.js          materials, sections, assemblies and the load take-down run over them
+    masses.js         what the wheels weigh, from the dimensions they are drawn with
+    solve.test.mjs    the solver against textbook cases (`npm test`)
   clock/
     clockwork.js      pendulum, escapement, going train, hands, floor wheels, lifts, and their simulation
     gears.js          tooth geometry, colliders, mesh phasing

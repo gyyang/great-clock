@@ -1,20 +1,14 @@
 // The static building: shell, galleries, stairs, lift cage, bridges, the dial,
 // and the iron frame that carries the arbors. The town outside is city.js.
 //
-// How it stands up. Everything has a path to the ground:
-//   - the wheels sit on arbors, the arbors in pillow blocks on plate girders that bear on
-//     padstones in the side walls and, since no girder that shallow spans 140 m, hang
-//     every 8.75 m on tie rods from the roof purlins;
-//   - the crossings are lattice girders (their parapets), hung on rods the same way, or
-//     from an arbor girder where one runs overhead;
-//   - galleries are bracketed off the walls with knee braces;
-//   - each flight of stairs rests every eight metres on a cantilever from the back wall,
-//     tied back from above low down and braced from below higher up;
-//   - the roof trusses, eighteen metres deep at the ridge, take it all to the walls.
-// Rods are only put where a line straight up is clear of every wheel (buildStructure).
+// What carries the wheels and hangs the walkways is structure.js, which sizes it by
+// analysis. Here: galleries bracketed off the walls with knee braces, and each flight
+// of stairs resting every eight metres on a cantilever from the back wall.
 import * as THREE from 'three';
 import { G, MAT, QX, ibox, icyl, iknob, cbox, sbox, tbox, tplane, beam, tube, deck, rail, railRun, stair, lamp, cagePanel } from '../kit.js';
-import { TOWER, LEVELS, DIAL, ARBOR, STAIRS, LIFT, BRIDGES, LEDGE, ROOF, DEG, bobLanding } from '../layout.js';
+import { TOWER, LEVELS, DIAL, STAIRS, LIFT, BRIDGES, LEDGE, ROOF, DEG, bobLanding } from '../layout.js';
+import { assembly, SECTION, MATERIAL } from '../structure/model.js';
+import { EDGES } from './structure.js';
 
 const TAU = Math.PI * 2;
 
@@ -142,24 +136,33 @@ function liftCage() {
 
 // The parapet of a crossing is its girder: a lattice 1.2 m deep along each edge, panels a
 // quarter of the hanger spacing, diagonals falling toward the middle of each bay (in tension).
-const PANEL = 8.75 / 4, GIRDER_H = 1.24, EDGES = [];
-function latticeGirder(y, z) {
-  const top = y + GIRDER_H, x0 = -65, x1 = 65, lo = y - 0.2;
-  beam('iron', [x0, top, z], [x1, top, z], 0.12, 0.09);
-  const first = Math.ceil((x0 - ROOF.purlins[0]) / PANEL);
+const PANEL = 8.75 / 4, GIRDER_H = 1.24;
+function latticeGirder(name, y, z, width, wallAt = null) {
+  const top = y + GIRDER_H, x0 = -65, x1 = 65, lo = y - 0.2, alloy = MATERIAL.alloy;
+  const A = assembly(`crossing ${name} ${z.toFixed(2)}`, 'lattice parapet girder, hung from the roof');
+  const tubeOf = (side) => SECTION.box(side, side, side / 12);
+  const bar = (a, b, side, label) => { beam('iron', a, b, side, side); A.member(a, b, tubeOf(side), alloy, 'beam', label); };
+  beam('iron', [x0, top, z], [x1, top, z], 0.2, 0.14); A.member([x0, top, z], [x1, top, z], SECTION.box(0.2, 0.14, 0.014), alloy, 'beam', 'top chord');
+  A.member([x0, lo, z], [x1, lo, z], SECTION.box(0.42, 0.18, 0.02), alloy, 'beam', 'bottom chord');           // the deck's edge beam (drawn by deck())
+  const first = Math.ceil((x0 - ROOF.purlins[0]) / PANEL), deckLoad = (120 + 400) * width / 2;                // kg per metre of edge: grating and beams, and a crowd
   for (let i = first; ROOF.purlins[0] + i * PANEL < x1; i++) {
     const xa = Math.max(x0, ROOF.purlins[0] + i * PANEL), xb = Math.min(x1, ROOF.purlins[0] + (i + 1) * PANEL), k = ((i % 4) + 4) % 4;
-    beam('iron', [xa, lo, z], [xa, top, z], 0.06, 0.05);
-    if (k < 2) beam('iron', [xa, top, z], [xb, lo, z], 0.05, 0.04); else beam('iron', [xa, lo, z], [xb, top, z], 0.05, 0.04);
+    bar([xa, lo, z], [xa, top, z], 0.1, 'vertical');
+    if (k < 2) bar([xa, top, z], [xb, lo, z], 0.1, 'diagonal'); else bar([xa, lo, z], [xb, top, z], 0.1, 'diagonal');
     if (k === 0) ibox('iron', 0.34, 0.3, 0.02, xa, top - 0.1, z);                           // gusset where a hanger takes the load
+    A.mass([xa, lo, z], deckLoad * (xb - xa), 'deck');
   }
-  EDGES.push({ y: top + 0.06, z });
+  for (const x of [x0, x1]) A.rest([x, lo, z], 'wall').rest([x, top, z], 'wall');
+  // an edge that runs along a wall sits on corbels built into it, wherever there is wall to build into
+  if (wallAt) for (let x = ROOF.purlins[0]; x < x1; x += 2 * PANEL) if (wallAt(x)) { A.rest([x, lo, z], 'wall'); ibox('stone', 0.5, 0.7, 0.9, x, lo - 0.55, z + 0.25); }
+  EDGES.push({ name: A.name, y: top + 0.06, yc: top, z });
 }
 
 function bridges() {
   for (const [name, b] of Object.entries(BRIDGES)) {
     deck(-65, 65, b.z0, b.z1, b.y);
-    latticeGirder(b.y, b.z0 - 0.1); latticeGirder(b.y, b.z1 + (name === 'balcony' ? -0.12 : 0.1));
+    latticeGirder(name, b.y, b.z0 - 0.1, b.z1 - b.z0); latticeGirder(name, b.y, b.z1 + (name === 'balcony' ? -0.45 : 0.1), b.z1 - b.z0,          // (the balcony's girder stands clear of the wall, so its hangers can pass the dial's rim)
+      name === 'balcony' ? (x) => Math.hypot(x - DIAL.x, b.y - DIAL.y) > DIAL.r + 1 : null);   // the balcony runs along the front wall, except across the dial
     rail([-65, b.y, b.z0], [65, b.y, b.z0]);
     if (name !== 'balcony') rail([-65, b.y, b.z1], [65, b.y, b.z1]);
     for (const x of [-45, -15, 15, 45]) lamp(x, b.y, b.z0);
@@ -189,49 +192,6 @@ function bobLandings() {
 }
 
 // Wall-to-wall iron I-beams with pillow blocks: the "plates" of this movement.
-// Plate girders with pillow blocks: the "plates" of this movement. Each bears on padstones
-// built into the side walls; buildStructure() hangs it from the roof in between.
-const GIRDERS = [];
-function frame() {
-  const beams = [
-    ['esc', 1.6, 1.1], ['esc', 8.3, 1.1], ['pivot', -6.25, 1.0], ['pivot', -12.6, 1.0],
-    ['third', 3.2, 1.2], ['third', 11.8, 1.2, 0.8], ['center', 18.3, 1.3], ['center', 26, 1.3],
-    ['great', 24.2, 1.4], ['great', 30.5, 1.4], ['minute', 27.8, 1.0], ['minute', 35.2, 1.0],
-  ];
-  const qz90 = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0));
-  for (const [name, z, r, w = 1.0] of beams) {
-    const a = ARBOR[name], yc = a.y - r - 1.0, len = 2 * TOWER.hx;
-    GIRDERS.push({ z, w, top: yc + 0.8, bottom: yc - 0.8, collider: cbox(len, 1.6, w, 0, yc, z) });
-    ibox('iron', len, 0.16, w, 0, yc + 0.72, z); ibox('iron', len, 0.16, w, 0, yc - 0.72, z); ibox('iron', len, 1.28, 0.14, 0, yc, z);
-    for (let x = -68; x <= 68; x += 4) ibox('iron', 0.1, 1.28, w - 0.1, x, yc, z);          // web stiffeners
-    for (let x = -60; x <= 60; x += 20) { ibox('iron', 2.4, 0.06, w + 0.06, x, yc + 0.82, z); for (const dx of [-0.8, 0, 0.8]) for (const dz of [-0.35, 0.35]) ibox('rivet', 0.14, 0.1, 0.14, x + dx, yc + 0.88, z + dz * w); }
-    for (const sx of [-1, 1]) {                                                             // padstone and bearing plate in each wall
-      ibox('stone', 1.5, 1.2, w + 1.2, sx * (TOWER.hx - 0.75), yc - 1.42, z); ibox('iron', 1.3, 0.06, w + 0.3, sx * (TOWER.hx - 0.7), yc - 0.79, z);
-    }
-    // pillow block: iron housing, bronze bearing shell
-    sbox('iron', r * 2 + 2.4, 0.5, 1.5 * w, a.x, a.y - r - 0.45, z);
-    sbox('iron', r * 2 + 1.2, r * 2 + 0.7, 1.2 * w, a.x, a.y - 0.1, z);
-    icyl('bronze', r + 0.3, 1.36 * w, a.x, a.y, z, qz90);
-    for (const dx of [-(r + 0.9), r + 0.9]) icyl('steel', 0.2, 0.5, a.x + dx, a.y - r - 0.1, z);
-  }
-}
-
-// Riveted roof trusses, far overhead.
-function trusses() {
-  const y0 = 219, apex = 237, hx = TOWER.hx, top = (x) => y0 + (apex - y0) * (1 - Math.abs(x) / hx);
-  const xs = [-70, -52.5, -35, -17.5, 0, 17.5, 35, 52.5, 70];
-  for (const z of [-32, -16, 0, 16, 32]) {
-    beam('iron', [-hx, y0, z], [hx, y0, z], 0.7, 0.45);
-    beam('iron', [-hx, y0, z], [0, apex, z], 0.6, 0.45); beam('iron', [hx, y0, z], [0, apex, z], 0.6, 0.45);
-    for (let i = 1; i < xs.length - 1; i++) {
-      beam('iron', [xs[i], y0, z], [xs[i], top(xs[i]), z], 0.3, 0.3);
-      const j = xs[i] < 0 ? i + 1 : i - 1;
-      if (xs[i] !== 0) beam('iron', [xs[i], y0, z], [xs[j], top(xs[j]), z], 0.26, 0.26);
-    }
-  }
-  for (const x of ROOF.purlins) beam('iron', [x, ROOF.at(x) + 0.4, -TOWER.hz], [x, ROOF.at(x) + 0.4, TOWER.hz], 0.5, 0.3);      // purlins: what the tie rods hang from
-}
-
 function decor() {
   const { hx, hz, H } = TOWER;
   // copper steam mains in the corners
@@ -253,38 +213,6 @@ function decor() {
   icyl('bronze', 1.2, 0.6, bx, 11.4, bz);
 }
 
-// Hangs the girders and the crossings from the roof. Called once the wheels are in place, so
-// that a rod is only put where the line straight up from it is clear of everything that turns.
-export function buildStructure() {
-  G.world.step();                                    // lets the ray casts below see every collider made so far
-  const R = G.R, girder = new Map(GIRDERS.map(g => [g.collider.handle, g]));
-  // Height at which a rod rising from (x, y, z) can be anchored: a purlin, or the underside of
-  // a girder. null if a wheel, an arbor or a walkway is in the way. Several rays, spread wider
-  // than a tooth, because a tooth that is clear now will not be in a minute.
-  function anchor(x, y, z) {
-    let best = ROOF.at(x) + 0.15;
-    for (const dx of [0, -0.7, 0.7, -1.4, 1.4]) for (const dz of [0, -0.25, 0.25]) {
-      const hit = G.world.castRay(new R.Ray({ x: x + dx, y: y + 0.05, z: z + dz }, { x: 0, y: 1, z: 0 }), ROOF.at(x) - y, true);
-      if (!hit) continue;
-      if (!girder.has(hit.collider.handle)) return null;
-      if (dx === 0 && dz === 0) best = y + 0.05 + (hit.timeOfImpact ?? hit.toi);
-    }
-    return best;
-  }
-  let rods = 0;
-  function tie(x, y, z, r) {
-    const top = anchor(x, y, z);
-    if (top === null || top - y < 1.2) return;
-    tube('steel', [x, y, z], [x, top, z], r);
-    ibox('iron', r * 3.4, 0.6, r * 3.4, x, y + 1.9, z);                                      // turnbuckle, to level what hangs from it
-    iknob('steel', r * 2.2, x, y, z); iknob('steel', r * 2.2, x, top, z);
-    rods++;
-  }
-  for (const g of GIRDERS) for (const x of ROOF.purlins) tie(x, g.top, g.z, 0.07);
-  for (const e of EDGES) for (const x of ROOF.purlins) tie(x, e.y, e.z, 0.035);
-  return { rods };
-}
-
 export function buildTower() {
-  shell(); galleries(); liftCage(); bridges(); bobLandings(); frame(); trusses(); decor();
+  shell(); galleries(); liftCage(); bridges(); bobLandings(); decor();
 }
