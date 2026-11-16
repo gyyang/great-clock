@@ -3,6 +3,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { createEnv } from './world/env.js';
 import { initKit, flushBatches, MAT } from './kit.js';
 import { buildTower } from './world/tower.js';
+import { buildProps } from './world/props.js';
 import { buildClockwork } from './clock/clockwork.js';
 import { buildEngine } from './engine/engine.js';
 import { Player } from './player.js';
@@ -24,6 +25,7 @@ async function main() {
   buildTower();
   const clock = buildClockwork();
   const engine = buildEngine(clock, env.scene);
+  const props = buildProps(clock.floor);
   flushBatches();
   // everything solid both casts and receives the dial light's shadows
   env.scene.traverse((o) => {
@@ -127,6 +129,7 @@ async function main() {
     while (acc >= DT && steps < 14) {
       clock.update(DT);
       engine.update(DT);
+      props.step();
       player.step(DT);
       world.step();
       acc -= DT; steps++;
@@ -134,6 +137,7 @@ async function main() {
     if (steps === 14) acc = 0;
     const p = player.position;
     if (p.y < -60 || !Number.isFinite(p.y) || player.speed > 400) go(0);
+    else if (clock.caught(p)) { go(0); say('Caught in the wheels'); sound.land(30); shake = 1; }
 
     player.updateCamera(env.camera, dt);
     shake = Math.max(0, shake - dt * 1.8);
@@ -154,6 +158,7 @@ async function main() {
     }
     outside = env.update(dt, p);
     engine.frame(dt);
+    props.sync();
     sound.setWind(player.speed, outside);
     sound.setHiss(ventOpen ? engineVol() : 0);
     hudT += dt; if (hudT > 0.2) { hudT = 0; hud(); }
@@ -167,8 +172,8 @@ async function main() {
   requestAnimationFrame(frame);
 
   // handy from the console
-  window.__game = { player, clock, engine, env, world, sound, go, SPOTS,
-    advance: (sec) => { for (let i = 0; i < sec / DT; i++) { clock.update(DT); engine.update(DT); player.step(DT); world.step(); } }, look: (yaw, pitch) => { player.yaw = yaw; player.pitch = pitch; } };
+  window.__game = { RAPIER, player, clock, engine, props, env, world, sound, go, SPOTS,
+    advance: (sec) => { for (let i = 0; i < sec / DT; i++) { clock.update(DT); engine.update(DT); props.step(); player.step(DT); world.step(); } }, look: (yaw, pitch) => { player.yaw = yaw; player.pitch = pitch; } };
 }
 
 main().catch((err) => {

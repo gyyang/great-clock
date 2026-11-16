@@ -33,12 +33,18 @@ Then open the URL it prints.
 - **Boiler** – pressure falls as the engine draws steam and recovers as the fire catches up; shut the regulator and the safety valve lifts at 6 bar.
 - **You** – a dynamic rigid body (Rapier). Your feet can only push with friction (μ·g), which is also all that holds you on a turning gear: stand too far out on the flywheel and it throws you. Falling has air drag (terminal ≈ 55 m/s).
 - **Lifts** – the paternoster platforms move one storey on every beat.
+- **Everything is solid** – every tooth of every wheel, the pendulum and its rating nut, the engine's crank and connecting rod are moving colliders. Stand in a tooth's way and it hits you at the speed it is travelling (about 5 m/s at the rim of the floor wheels). Go down between two meshing wheels and you do not come out.
+- **Loose things** – crates, barrels and brass shot are ordinary rigid bodies. Shove them, stack them, roll them into the teeth. The pendulum's nut knocks over whatever stands in its path; a turning wheel carries what stands on it for as long as friction can supply the centripetal force (μ·g) and throws it off beyond that.
 
 ### Things to try
 
 The regulator (key 7, then walk up to the lever) has four notches: shut, half, full, and full with the
 governor tied down. At half you can stand anywhere on the flywheel. With the governor tied down the
 engine runs away to about 16 rev/min and the flywheel will not keep you past a few metres from its centre.
+The three crates riding the flywheel stay put at the governed speed and are flung across the hall when it runs away.
+
+Stand at the rim of the great floor wheel and let a tooth catch you. Push a barrel into its teeth. Wait by
+the crate stack under the pendulum for the next swing.
 
 ## Layout
 
@@ -52,6 +58,7 @@ src/
   audio.js            all sound, synthesised
   world/
     tower.js          the building and the city outside
+    props.js          loose crates, barrels and shot
     env.js            renderer, light, shadow, haze, sky, post-processing
   clock/
     clockwork.js      pendulum, escapement, going train, hands, floor wheels, lifts, and their simulation
@@ -65,5 +72,6 @@ src/
 
 Simulation code never draws and drawing code never integrates: `clock/clockwork.js` and
 `engine/physics.js` advance on a fixed 1/120 s step, and everything visible is posed from their state.
+Rigid-body contact (you, the props, every moving part) is Rapier's.
 From the browser console, `__game` exposes the player, clock, engine and a few helpers
 (`__game.advance(seconds)` fast-forwards the simulation).

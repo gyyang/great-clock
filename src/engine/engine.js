@@ -23,9 +23,19 @@ export function buildEngine(clock, scene) {
   const crankAngle = () => Math.PI / 2 - h3.angle;      // 0 with the crank pointing at the cylinder
 
   // ---- once per physics step
+  // Where the connecting rod is with the crank at angle a: z of its crosshead end, and its swing about y.
+  function rodPose(a) {
+    const sc = crosshead(a);
+    return { z: O.z - sc, yaw: Math.atan2(-(sc - E.crank * Math.cos(a)), E.crank * Math.sin(a)) };
+  }
+  const _t = { x: O.x, y: E.axisY, z: 0 }, _q = { x: 0, y: 0, z: 0, w: 1 };
   function update(dt) {
-    sim.step(dt, crankAngle());
+    const a = crankAngle();
+    sim.step(dt, a);
     clock.state.floorRate = sim.w / NOMINAL;
+    const r = rodPose(a);                                  // the rod is a solid, moving body
+    _t.z = r.z; _q.y = Math.sin(r.yaw / 2); _q.w = Math.cos(r.yaw / 2);
+    model.rodBody.setNextKinematicTranslation(_t); model.rodBody.setNextKinematicRotation(_q);
   }
 
   // ---- once per rendered frame
@@ -35,10 +45,10 @@ export function buildEngine(clock, scene) {
     while (flow[key] >= 1) { flow[key]--; fn(); }
   }
   function pose(dt) {
-    const a = crankAngle(), sc = crosshead(a), z = O.z - sc;
-    model.slide.position.z = z;
-    model.rod.position.z = z;
-    model.rod.rotation.y = Math.atan2(-(sc - E.crank * Math.cos(a)), E.crank * Math.sin(a));
+    const a = crankAngle(), r = rodPose(a);
+    model.slide.position.z = r.z;
+    model.rod.position.z = r.z;
+    model.rod.rotation.y = r.yaw;
     model.valveRod.position.z = 3.0 - 0.28 * Math.sin(a);                 // the valve leads the piston by a quarter turn
     model.gov.rotation.y += sim.govSpeed * dt;
     const drop = -E.govArm * Math.cos(sim.gov);

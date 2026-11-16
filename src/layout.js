@@ -84,3 +84,21 @@ export const ENGINE = {
   pipeY: 7.5, pipeWallX: 68.4,                        // steam supply from the corner main
   safety: { x: -41, y: 11.2, z: -22 },                // safety valve, on top of the boiler
 };
+
+// Loose things lying about the hall: [kind, x, y of its base, z, floor wheel it starts out riding (0 great wheel, 1 idler, 2 flywheel)].
+const crate = (x, y, z) => ['crate', x, y, z], barrel = (x, y, z) => ['barrel', x, y, z], shot = (x, y, z) => ['shot', x, y, z];
+const onFly = (a, r) => [FLOOR.h3.x + r * Math.cos(a), FLOOR.flyTop, FLOOR.h3.z + r * Math.sin(a), 2];
+export const PROPS = [
+  // a pile by the door, to shove about
+  crate(7, 0, -23), crate(7.9, 0, -23.1), crate(7.4, 0.8, -23), crate(8.9, 0, -22.6), barrel(6, 0, -22.2), barrel(9.9, 0, -23.4),
+  shot(5.2, 0, -24.4), shot(5.75, 0, -24.4), shot(6.3, 0, -24.4),
+  // a stack standing where the pendulum's rating nut sweeps the floor
+  crate(6, 0, -10), crate(6, 0.8, -10), crate(6, 1.6, -10), barrel(7.4, 0, -10.2),
+  // riding the idler wheel
+  [...barrel(FLOOR.h2.x + 4, FLOOR.top, FLOOR.h2.z), 1], [...barrel(FLOOR.h2.x - 3, FLOOR.top, FLOOR.h2.z + 3), 1],
+  // riding the flywheel: they stay put at the governed speed, and not when the governor is tied down
+  ['crate', ...onFly(0.4, 2.4)], ['crate', ...onFly(2.5, 2.4)], ['crate', ...onFly(4.6, 2.4)],
+  // within a shove of the great floor wheel's teeth
+  barrel(FLOOR.h1.x - 19.6, 0, FLOOR.h1.z - 2), barrel(FLOOR.h1.x - 19.8, 0, FLOOR.h1.z), crate(FLOOR.h1.x - 20, 0, FLOOR.h1.z + 2.2),
+  shot(FLOOR.h1.x - 19.5, 0, FLOOR.h1.z + 4), shot(FLOOR.h1.x - 19.5, 0, FLOOR.h1.z + 4.6),
+];

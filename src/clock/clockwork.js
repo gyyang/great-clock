@@ -2,7 +2,7 @@
 // escapement lets one tooth through per beat; the escape wheel's angle then
 // drives every other wheel, and finally the hands, through true gear ratios.
 import * as THREE from 'three';
-import { G, MAT, QX, ibox, icyl, cbox, deck, rail, stair, lamp } from '../kit.js';
+import { G, MAT, QX, ibox, icyl, sbox, deck, rail, stair, lamp } from '../kit.js';
 import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 import { spec, gearGeometry, escapeSpec, escapeOutline, extrude, planarUV, addGearColliders, addEscapeColliders, meshOffset, rivetRing, boltCircle } from './gears.js';
 import { DEG, GRAV, PEND, ESC, ARBOR, LAYER, DIAL, LEVELS, LIFT, FLOOR, TOWER } from '../layout.js';
@@ -123,6 +123,7 @@ export function buildClockwork() {
     pen.addCollider(R.ColliderDesc.cuboid(ex, 0.15, ez).setTranslation(0, deckY - 0.15, pz));
     pen.addCollider(R.ColliderDesc.cuboid(1.15, (L - 9) / 2, 0.3).setTranslation(0, -(1.5 + (L - 9) / 2), pz));
     pen.addCollider(R.ColliderDesc.cylinder(1.5, PEND.bobR).setRotation(QX).setTranslation(0, -L, pz));
+    pen.addCollider(R.ColliderDesc.cylinder(0.7, 1.6).setTranslation(0, -L - PEND.bobR - 1, pz));       // rating nut: it skims the floor
 
     // anchor: pallet tips sit on tangents from the pivot to the escape wheel's tip circle
     const rp = ESC.R - 0.2, tx = rp * Math.sin(ESC.pallet), ty = -ESC.D + rp * Math.cos(ESC.pallet);
@@ -207,7 +208,7 @@ export function buildClockwork() {
   }
 
   // ---- floor gears: always turning, shrouded so you can walk across the mesh
-  const floorRotors = [];
+  const floorRotors = [], nips = [];
   {
     const F = FLOOR, t = 1.6, cy = F.top - 0.1 - t / 2;
     const mk = (d) => {
@@ -215,14 +216,29 @@ export function buildClockwork() {
       const m = new THREE.Mesh(gearGeometry(s), MAT.brass); r.group.add(m);
       const fg = new THREE.CylinderGeometry(s.r, s.r, 0.1, 96); fg.rotateX(Math.PI / 2);
       const fl = new THREE.Mesh(fg, [MAT.bronze, MAT.turntable, MAT.bronze]); fl.position.z = t / 2 + 0.05; r.group.add(fl);
-      r.addCollider(R.ColliderDesc.cylinder(t / 2 + 0.05, s.ra).setRotation(QX).setTranslation(0, 0, 0.05));
+      addGearColliders(r, s, 0);                                                                      // every tooth is solid: stand in its way and it hits you
+      r.addCollider(R.ColliderDesc.cylinder(0.05, s.r).setRotation(QX).setTranslation(0, 0, t / 2 + 0.05));   // the shroud you walk on
       icyl('iron', Math.min(3, s.r * 0.4), cy - t / 2, d.x, (cy - t / 2) / 2, d.z);
       r.spec = s; floorRotors.push(r); return r;
     };
     const h1 = mk(F.h1), h2 = mk(F.h2), h3 = mk(F.h3);
     const flat = (a, b) => Math.atan2(-(b.center.z - a.center.z), b.center.x - a.center.x);
     h1.k = F.w1; h1.c = 0;
-    for (const [a, b] of [[h1, h2], [h1, h3]]) { b.k = -a.k * a.spec.N / b.spec.N; b.c = meshOffset(flat(a, b), a.spec.N, b.spec.N); }
+    for (const [a, b] of [[h1, h2], [h1, h3]]) {
+      b.k = -a.k * a.spec.N / b.spec.N; b.c = meshOffset(flat(a, b), a.spec.N, b.spec.N);
+      // Nip guards: an iron plate either side of the mesh, where the gap between the wheels
+      // narrows to a body's width. Teeth will knock you about; the nip would not let go.
+      const Ra = a.spec.r, Rb = b.spec.r, curv = 1 / Ra + 1 / Rb;
+      nips.push({ a: a.center, ra: a.spec.ra - 0.2, b: b.center, rb: b.spec.ra - 0.2 });
+      const dx = b.center.x - a.center.x, dz = b.center.z - a.center.z, len = Math.hypot(dx, dz), ux = dx / len, uz = dz / len;
+      const d = Math.sqrt(2 * (1.1 + 2 * F.m) / curv), off = d * d * (1 / Rb - 1 / Ra) / 4;       // where the gap is 1.1 m, and its middle
+      const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(-uz, ux));
+      for (const sg of [-1, 1]) {
+        const gx = a.center.x + ux * (Ra + off) - uz * d * sg, gz = a.center.z + uz * (Ra + off) + ux * d * sg;
+        sbox('iron', 1.0, 2.1, 0.12, gx, 1.05, gz, q);
+        ibox('rail', 1.1, 0.1, 0.2, gx, 2.15, gz, q);
+      }
+    }
     // main shaft rising out of the big wheel
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, 14, 24).rotateX(Math.PI / 2), MAT.steel); shaft.position.z = 7.9; h1.group.add(shaft);
     h1.addCollider(R.ColliderDesc.cylinder(7, 1.1).setRotation(QX).setTranslation(0, 0, 7.9));
@@ -319,6 +335,11 @@ export function buildClockwork() {
   return {
     update, state: s,
     floor: floorRotors,          // [great wheel, idler, flywheel pinion]: driven by the steam engine
+    // Is a body at p down among the teeth where two floor wheels mesh? Nothing comes out of there.
+    caught(p) {
+      if (p.y > FLOOR.top - 0.1) return false;
+      return nips.some(n => Math.hypot(p.x - n.a.x, p.z - n.a.z) < n.ra && Math.hypot(p.x - n.b.x, p.z - n.b.z) < n.rb);
+    },
     // If the mechanism has fallen more than half a minute behind the wall clock, set it right.
     resync() { let d = Math.abs(beatsNow() - s.n); d = Math.min(d, 4320 - d); if (d > 3) { s.n = beatsNow(); rest(); setTrain(); } },
     on(name, fn) { listeners[name].push(fn); },

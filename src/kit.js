@@ -256,6 +256,7 @@ function makeMaterials() {
   MAT.iron = S({ color: 0x2e3135, metalness: 0.85, roughness: 0.62 });
   MAT.rail = S({ color: 0x25272b, metalness: 0.9, roughness: 0.45 });
   MAT.rivet = S({ color: 0x7a6238, metalness: 1, roughness: 0.42 });
+  MAT.handrail = S({ color: 0xb98a3c, metalness: 1, roughness: 0.36 });       // brass, polished by hands
   MAT.brick = S({ map: TEX.brick, normalMap: TEX.brickN, normalScale: v2(1.2), roughness: 0.93, metalness: 0 });
   MAT.plate = S({ map: TEX.plate, normalMap: TEX.plateN, normalScale: v2(1.1), roughnessMap: TEX.plateR, roughness: 0.95, metalness: 0.7 });
   MAT.grate = S({ map: TEX.grate, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.5, metalness: 0.85 });
@@ -278,10 +279,27 @@ export function initKit(scene, world, RAPIER) {
 }
 
 // ------------------------------------------------------ instanced primitives
+// A stair tread: a unit box whose top and bottom carry a strip of the tread-plate
+// texture at true scale (0.28 m of run, mirrored about the centre line across the width).
+function treadGeo() {
+  const g = new THREE.BoxGeometry(1, 1, 1, 1, 1, 2), p = g.attributes.position, n = g.attributes.normal, uv = g.attributes.uv;
+  for (let i = 0; i < p.count; i++) {
+    if (Math.abs(n.getY(i)) > 0.5) uv.setXY(i, 0.1 + (p.getX(i) + 0.5) * 0.07, 0.06 + Math.abs(p.getZ(i)) * 0.76);
+    else uv.setXY(i, 0.11, 0.2);                                   // edges: plain metal
+  }
+  return g;
+}
 const UNIT = {
   box: new THREE.BoxGeometry(1, 1, 1),
   cyl: new THREE.CylinderGeometry(1, 1, 1, 48),
   sph: new THREE.SphereGeometry(1, 16, 12),
+  // light versions for the thousands of small parts in railings, stairs and lamps
+  tube: new THREE.CylinderGeometry(1, 1, 1, 10, 1, true).rotateZ(Math.PI / 2),   // lies along x, open ends
+  rod: new THREE.CylinderGeometry(1, 1, 1, 10),                                  // stands on y
+  knob: new THREE.IcosahedronGeometry(1, 1),
+  stud: new THREE.IcosahedronGeometry(1, 0),
+  cone: new THREE.ConeGeometry(1, 1, 12),
+  tread: treadGeo(),
 };
 const batches = new Map();
 function push(kind, mat, sx, sy, sz, x, y, z, q) {
@@ -293,6 +311,8 @@ function push(kind, mat, sx, sy, sz, x, y, z, q) {
 export const ibox = (mat, sx, sy, sz, x, y, z, q) => push('box', mat, sx, sy, sz, x, y, z, q);
 export const icyl = (mat, r, h, x, y, z, q) => push('cyl', mat, r, h, r, x, y, z, q);
 export const isph = (mat, r, x, y, z) => push('sph', mat, r, r, r, x, y, z);
+const irod = (mat, r, h, x, y, z) => push('rod', mat, r, h, r, x, y, z);        // vertical, centred on y
+const iknob = (mat, r, x, y, z) => push('knob', mat, r, r, r, x, y, z);
 
 export function flushBatches() {
   for (const b of batches.values()) {
@@ -370,15 +390,37 @@ export function beam(mat, a, b, h = 0.2, w = 0.2) {
   ibox(mat, f.len, h, w, f.mx, f.my, f.mz, f.q);
 }
 
+// A round bar between two points.
+export function tube(mat, a, b, r) {
+  const f = frame(a, b);
+  push('tube', mat, f.len, r, r, f.mx, f.my, f.mz, f.q);
+}
+
+// A turned baluster: foot, shaft, a knuckle where the mid rail passes and a ball under the hand.
+function baluster(x, y, z) {
+  irod('rail', 0.05, 0.06, x, y + 0.03, z);
+  irod('rail', 0.024, 1.06, x, y + 0.55, z);
+  iknob('rail', 0.042, x, y + 0.58, z);
+  iknob('handrail', 0.056, x, y + 1.1, z);
+}
+// The heavier post that starts and ends a flight of stairs.
+function newel(x, y, z) {
+  irod('rail', 0.09, 0.1, x, y + 0.05, z);
+  irod('rail', 0.045, 1.16, x, y + 0.62, z);
+  iknob('rail', 0.07, x, y + 0.6, z);
+  iknob('handrail', 0.09, x, y + 1.24, z);
+}
+
 // Handrail from a to b (points at walking-surface height). May slope.
 export function rail(a, b, collide = true) {
   const f = frame(a, b);
   if (f.len < 0.05) return;
-  ibox('rail', f.len, 0.08, 0.08, f.mx, f.my + 1.1, f.mz, f.q);
-  ibox('rail', f.len, 0.05, 0.05, f.mx, f.my + 0.55, f.mz, f.q);
-  ibox('rail', f.len, 0.14, 0.03, f.mx, f.my + 0.08, f.mz, f.q);     // toe board
-  const n = Math.max(1, Math.round(f.len / 2.5));
-  for (let i = 0; i <= n; i++) { const t = i / n; ibox('rail', 0.08, 1.1, 0.08, a[0] + f.dx * t, a[1] + f.dy * t + 0.55, a[2] + f.dz * t, f.qy); }
+  const lift = (h) => [[a[0], a[1] + h, a[2]], [b[0], b[1] + h, b[2]]];
+  tube('handrail', ...lift(1.1), 0.035);
+  tube('rail', ...lift(0.58), 0.02);
+  ibox('rail', f.len, 0.12, 0.012, f.mx, f.my + 0.07, f.mz, f.q);     // kick plate
+  const n = Math.max(1, Math.round(f.len / 1.7));
+  for (let i = 0; i <= n; i++) { const t = i / n; baluster(a[0] + f.dx * t, a[1] + f.dy * t, a[2] + f.dz * t); }
   if (collide) cbox(f.len, 1.2, 0.1, f.mx, f.my + 0.6, f.mz, f.q);
 }
 
@@ -390,30 +432,50 @@ export function railRun(axis, c, from, to, y, gaps = []) {
   if (cur < to) seg(cur, to);
 }
 
-// Open-tread stair from a (bottom) to b (top). Collides as a smooth ramp.
+// Stair from a (bottom) to b (top): tread-plate steps with a worn nosing, carried on
+// brackets between two riveted channel stringers. Collides as a smooth ramp.
 export function stair(a, b, width, rails = [true, true]) {
   const f = frame(a, b);
-  const n = new THREE.Vector3(0, 1, 0).applyQuaternion(f.q);
+  const n = new THREE.Vector3(0, 1, 0).applyQuaternion(f.q);           // normal to the slope
   cbox(f.len, 0.3, width, f.mx - n.x * 0.15, f.my - n.y * 0.15, f.mz - n.z * 0.15, f.q);
   const steps = Math.max(2, Math.round(f.dy / 0.19)), rise = f.dy / steps, run = f.hl / steps;
-  const ux = f.dx / f.hl, uz = f.dz / f.hl;
+  const ux = f.dx / f.hl, uz = f.dz / f.hl, px = -uz, pz = ux;         // along the flight, and across it
+  const half = width / 2;
   for (let i = 0; i < steps; i++) {
-    const s = (i + 0.5) * run;
-    ibox('iron', run * 0.92, 0.05, width, a[0] + ux * s, a[1] + (i + 0.5) * rise, a[2] + uz * s, f.qy);
+    const s = (i + 0.5) * run, cx = a[0] + ux * s, cz = a[2] + uz * s, top = a[1] + (i + 0.5) * rise;
+    push('tread', 'plate', run + 0.03, 0.035, width - 0.08, cx, top - 0.0175, cz, f.qy);
+    const nx = cx - ux * run * 0.5, nz = cz - uz * run * 0.5, e = half - 0.05;
+    tube('steel', [nx - px * e, top - 0.004, nz - pz * e], [nx + px * e, top - 0.004, nz + pz * e], 0.022);   // nosing
+    for (const sg of [-1, 1]) {
+      ibox('iron', run * 0.8, 0.05, 0.05, cx + px * sg * (half - 0.065), top - 0.06, cz + pz * sg * (half - 0.065), f.qy);   // bracket
+      push('stud', 'rivet', 0.024, 0.024, 0.024, cx + px * sg * (half + 0.014), top - 0.06, cz + pz * sg * (half + 0.014));
+    }
   }
   for (const [k, sg] of [[0, -1], [1, 1]]) {
-    const ox = -uz * width / 2 * sg, oz = ux * width / 2 * sg;
-    ibox('iron', f.len, 0.36, 0.1, f.mx + ox, f.my - 0.14, f.mz + oz, f.q);
-    if (rails[k]) rail([a[0] + ox, a[1], a[2] + oz], [b[0] + ox, b[1], b[2] + oz]);
+    const ox = px * half * sg, oz = pz * half * sg;
+    const wx = f.mx + ox - n.x * 0.13, wy = f.my - n.y * 0.13, wz = f.mz + oz - n.z * 0.13;       // centre of the stringer's web
+    ibox('iron', f.len, 0.34, 0.025, wx, wy, wz, f.q);
+    for (const fl of [-1, 1]) ibox('iron', f.len, 0.03, 0.11, wx + px * sg * 0.045 + n.x * fl * 0.17, wy + n.y * fl * 0.17, wz + pz * sg * 0.045 + n.z * fl * 0.17, f.q);
+    if (rails[k]) {
+      rail([a[0] + ox, a[1], a[2] + oz], [b[0] + ox, b[1], b[2] + oz]);
+      newel(a[0] + ox, a[1], a[2] + oz); newel(b[0] + ox, b[1], b[2] + oz);
+    }
   }
 }
 
-// Gas lamp on a post. The bulbs are what let you read distance in the haze.
+// Gas lamp: a turned post carrying a caged lantern under a hood.
+// The bulbs are what let you read distance in the haze.
 export function lamp(x, y, z) {
-  ibox('rail', 0.1, 2.6, 0.1, x, y + 1.3, z);
-  icyl('rail', 0.32, 0.05, x, y + 3.04, z); icyl('rail', 0.07, 0.16, x, y + 3.14, z);
-  icyl('rail', 0.2, 0.05, x, y + 2.55, z);
-  isph('bulb', 0.19, x, y + 2.8, z);
+  irod('rail', 0.12, 0.16, x, y + 0.08, z);
+  irod('rail', 0.075, 0.5, x, y + 0.41, z);
+  iknob('rail', 0.095, x, y + 0.68, z);
+  irod('rail', 0.038, 1.78, x, y + 1.57, z);
+  iknob('handrail', 0.066, x, y + 2.46, z);
+  irod('rail', 0.2, 0.03, x, y + 2.53, z);                             // lantern floor
+  for (const [dx, dz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) irod('rail', 0.012, 0.52, x + dx * 0.13, y + 2.8, z + dz * 0.13);
+  isph('bulb', 0.15, x, y + 2.8, z);
+  push('cone', 'rail', 0.27, 0.2, 0.27, x, y + 3.16, z);               // hood
+  iknob('handrail', 0.04, x, y + 3.28, z);
 }
 
 // Thin see-through cage panel (axis-aligned), with collision.

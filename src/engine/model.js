@@ -2,7 +2,7 @@
 // the operator's stand. Returns the handful of moving parts and the points
 // where steam escapes; engine.js poses them from the simulation.
 import * as THREE from 'three';
-import { G, MAT, ibox, icyl, isph, cbox, tbox, lamp, cagePanel } from '../kit.js';
+import { G, MAT, QX, ibox, icyl, isph, cbox, tbox, lamp, cagePanel } from '../kit.js';
 import { boltCircle } from '../clock/gears.js';
 import { ENGINE as E, FLOOR, TOWER, DEG } from '../layout.js';
 
@@ -55,6 +55,10 @@ export function buildEngineModel(h3) {
     add(g, box(E.crank + 1.7, 1.0, 0.25), MAT.steel, (E.crank - 0.9) / 2, 0, up(4.33));
     add(g, box(1.3, 2.0, 0.25), MAT.bronze, -1.7, 0, up(4.33));                              // counterweight
     add(g, zCyl(0.26, 0.62, 20), MAT.steel, E.crank, 0, up(4.14));                           // crank pin
+    const C = G.R.ColliderDesc;
+    h3.addCollider(C.cuboid((E.crank + 1.7) / 2, 0.5, 0.125).setTranslation((E.crank - 0.9) / 2, 0, up(4.33)));
+    h3.addCollider(C.cuboid(0.65, 1.0, 0.125).setTranslation(-1.7, 0, up(4.33)));
+    h3.addCollider(C.cylinder(0.31, 0.26).setRotation(QX).setTranslation(E.crank, 0, up(4.14)));
   }
 
   // ---- bed, guards and guide bars
@@ -90,6 +94,8 @@ export function buildEngineModel(h3) {
   add(rod, box(E.rod - 0.8, 0.26, 0.42), MAT.steel, E.rod / 2, 0, 0);
   add(rod, yCyl(0.52, 0.4), MAT.bronze, E.rod, 0, 0);
   add(rod, yCyl(0.4, 0.36), MAT.bronze, 0, 0, 0);
+  const rodBody = G.world.createRigidBody(G.R.RigidBodyDesc.kinematicPositionBased().setTranslation(O.x, E.axisY, at(E.rod)));
+  G.world.createCollider(G.R.ColliderDesc.cuboid(E.rod / 2, 0.13, 0.21).setTranslation(E.rod / 2, 0, 0), rodBody);
 
   // ---- governor
   const l = E.govArm, zg = at(E.govS);
@@ -150,7 +156,7 @@ export function buildEngineModel(h3) {
 
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
   return {
-    slide, rod, valveRod, gov, arms, links, sleeve, lever, setPressure, setSpeed,
+    slide, rod, rodBody, valveRod, gov, arms, links, sleeve, lever, setPressure, setSpeed,
     points: {
       centre: V(O.x, E.axisY, at(11)),
       exhaust: V(O.x + E.stackX, E.stackTop + 0.2, zCylc),
