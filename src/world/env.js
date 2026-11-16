@@ -1,15 +1,11 @@
-// Renderer, light, shadow, haze, sky, dust and post-processing.
+// Renderer, light, shadow, haze, sky and dust. The frame's post-processing is in post.js.
 //
 // Indoors there is one key light: daylight pouring in through the dial. It is a
 // shadow-casting spotlight outside the tower whose cone exactly fills the dial
 // opening, tinted by the dial's own glass, so the whole movement throws moving
 // shadows across the hall and onto the back wall.
 import * as THREE from 'three';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { createPost } from './post.js';
 import { TOWER, DIAL } from '../layout.js';
 import { MAT, TEX } from '../kit.js';
 
@@ -82,7 +78,7 @@ export function createEnv(canvas) {
   key.castShadow = true;
   key.shadow.mapSize.set(4096, 4096);
   key.shadow.camera.near = keyDist - 40; key.shadow.camera.far = keyDist + 150;
-  key.shadow.bias = -0.0002; key.shadow.normalBias = 0.07;
+  key.shadow.bias = -0.0002; key.shadow.normalBias = 0.07; key.shadow.radius = 2.5;
 
   const lantern = new THREE.PointLight(0xffb066, 40, 34, 2); scene.add(lantern);    // carried by you
   for (const [x, y, z, col, power] of [[44, 14, 12, 0xffa050, 420], [-45, 4, -13, 0xff6a28, 260], [0, 26, -26, 0xffa860, 520], [33, 9, -26, 0xffa050, 200]]) {
@@ -120,21 +116,13 @@ export function createEnv(canvas) {
   });
   const dust = new THREE.Points(dg, dustMat); dust.frustumCulled = false; scene.add(dust);
 
-  // ---- post: ambient occlusion, bloom, tone mapping
-  const db = renderer.getDrawingBufferSize(new THREE.Vector2());
-  const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(db.x, db.y, { type: THREE.HalfFloatType, samples: 4 }));
-  composer.addPass(new RenderPass(scene, camera));
-  const gtao = new GTAOPass(scene, camera, db.x, db.y, undefined,
-    { radius: 1.3, distanceExponent: 1.4, thickness: 1.6, scale: 1.25, samples: 12, distanceFallOff: 1, screenSpaceRadius: false },
-    { lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 5, radiusExponent: 1.4, rings: 2, samples: 12 });
-  composer.addPass(gtao);
-  const bloom = new UnrealBloomPass(new THREE.Vector2(db.x, db.y), 0.32, 0.7, 1.15);
-  composer.addPass(bloom);
-  composer.addPass(new OutputPass());
+  // ---- post: ambient occlusion, light shafts, bloom, grade (see post.js)
+  const post = createPost(renderer, scene, camera, key);
+  const gtao = post.gtao;
 
   function resize() {
     const w = window.innerWidth, h = window.innerHeight;
-    renderer.setSize(w, h, false); composer.setSize(w, h);
+    renderer.setSize(w, h, false); post.setSize(w, h);
     camera.aspect = w / h; camera.updateProjectionMatrix();
   }
   window.addEventListener('resize', resize);
@@ -157,7 +145,7 @@ export function createEnv(canvas) {
   const { hx, hz, H, wall } = TOWER, fogCol = new THREE.Color();
   function update(dt, p) {
     time += dt;
-    if (!key.map && TEX.dial) key.map = TEX.dial;       // the light takes the colour of the glass it passes through
+    if (!key.map && TEX.dial) { key.map = TEX.dial; post.shafts.setGlass(TEX.dial); }      // the light, and its shafts, take the colour of the glass they pass through
     const isOut = Math.abs(p.x) > hx + wall * 0.5 || p.z > hz + wall * 0.5 || p.z < -hz - wall * 0.5 || p.y > H + 1;
     outside += ((isOut ? 1 : 0) - outside) * Math.min(1, dt * 2.5);
     const k = outside, mix = (a, b) => a + (b - a) * k;
@@ -167,6 +155,7 @@ export function createEnv(canvas) {
     sun.intensity = OUT.sun * k;
     fill.intensity = IN.fill * (1 - k);
     key.intensity = IN.key * (1 - k); key.visible = k < 0.985;
+    post.shafts.strength = 1 - k;
     scene.environment = k > 0.5 ? envOut : envIn;
     lantern.intensity = 40 * (1 - k);
     lantern.position.set(camera.position.x, camera.position.y - 0.4, camera.position.z);
@@ -177,5 +166,5 @@ export function createEnv(canvas) {
     return k;
   }
 
-  return { renderer, scene, camera, composer, update, setQuality, get quality() { return quality; }, render: () => composer.render() };
+  return { renderer, scene, camera, post, update, setQuality, get quality() { return quality; }, render: post.render };
 }

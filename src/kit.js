@@ -2,6 +2,8 @@
 // instanced primitives, and the walkway / railing / stair helpers that give
 // the tower its human scale.
 import * as THREE from 'three';
+import { initSurfaces } from './surface/generate.js';
+import { surface } from './surface/material.js';
 
 export const G = { scene: null, world: null, R: null, parts: new Map() };
 export const MAT = {};
@@ -84,25 +86,6 @@ function gray(fn, size) {
 }
 
 function makeTextures() {
-  // ---- brick: 4 m tile, 0.5 x 0.25 m bricks, with relief
-  {
-    const S = 1024, rows = 16, rh = S / rows, bw = S / 8;
-    const col = canvas(S), hgt = canvas(S), cx = col.getContext('2d'), hx = hgt.getContext('2d');
-    cx.fillStyle = '#17110d'; cx.fillRect(0, 0, S, S); hx.fillStyle = 'rgb(62,62,62)'; hx.fillRect(0, 0, S, S);
-    for (let r = 0; r < rows; r++) for (let b = -1; b < 8; b++) {
-      const x = b * bw + (r % 2 ? bw / 2 : 0), y = r * rh, burnt = rnd() < 0.1 ? 0.55 : 1;
-      cx.fillStyle = `hsl(${8 + rnd() * 14},${26 + rnd() * 24}%,${(15 + rnd() * 13) * burnt}%)`;
-      cx.fillRect(x + 3, y + 3, bw - 6, rh - 6);
-      const hv = Math.round(150 + rnd() * 70);
-      hx.fillStyle = `rgb(${hv - 50},${hv - 50},${hv - 50})`; hx.fillRect(x + 3, y + 3, bw - 6, rh - 6);
-      hx.fillStyle = `rgb(${hv},${hv},${hv})`; hx.fillRect(x + 7, y + 7, bw - 14, rh - 14);
-    }
-    const soot = fbm(S, 3, 4, 11), grain = fbm(S, 96, 2, 12), h = heightOf(hgt);
-    shade(col, (i, r, g, b) => { const k = (0.82 + 0.36 * soot[i]) * (0.85 + 0.3 * grain[i]); return [r * k, g * k, b * k]; });
-    for (let i = 0; i < h.length; i++) h[i] += (grain[i] - 0.5) * 0.16;
-    TEX.brick = tex(col); TEX.brickN = tex(normalFrom(h, S, 5), { srgb: false });
-  }
-
   // ---- floor: 4 m tile of riveted tread plate (2 m plates, 6 cm diamonds)
   {
     const S = 1024, P = 16;
@@ -161,21 +144,8 @@ function makeTextures() {
     }
   }));
 
-  // ---- brass: tarnish drives both colour and roughness; a fine cast-metal normal on top
-  {
-    const S = 1024, n1 = fbm(S, 4, 5, 31), n2 = fbm(S, 18, 4, 32), sp = fbm(S, 160, 2, 33);
-    const tarnish = new Float32Array(S * S);
-    for (let i = 0; i < tarnish.length; i++) tarnish[i] = sstep(0.38, 0.86, n1[i] * 0.6 + n2[i] * 0.4);
-    const col = gray(() => 0, S);
-    shade(col, (i) => {
-      const t = tarnish[i] * 0.5, v = sstep(0.66, 0.84, n2[i]) * t * 0.5, k = 0.93 + 0.14 * sp[i];
-      const r = 236 + (122 - 236) * t, g = 226 + (100 - 226) * t, b = 206 + (68 - 206) * t;
-      return [(r + (104 - r) * v) * k, (g + (140 - g) * v) * k, (b + (118 - b) * v) * k];
-    });
-    TEX.patina = tex(col, { repeat: 1 / 12 });
-    TEX.patinaR = tex(gray((i) => 0.5 + 0.42 * tarnish[i] + (sp[i] - 0.5) * 0.12, S), { srgb: false, repeat: 1 / 12 });
-    TEX.micro = tex(normalFrom(fbm(512, 64, 3, 34), 512, 2.0), { srgb: false, repeat: 1 / 1.1 });
-  }
+  // ---- fine cast-metal normal for the turntable faces
+  TEX.micro = tex(normalFrom(fbm(512, 64, 3, 34), 512, 2.0), { srgb: false, repeat: 1 / 1.1 });
 
   // ---- machined turntable face for the flat gears: sectors make the spin readable
   TEX.turntable = tex(draw(1024, (c, s) => {
@@ -249,20 +219,22 @@ function makeTextures() {
 // --------------------------------------------------------------- materials
 function makeMaterials() {
   const S = (o) => new THREE.MeshStandardMaterial(o), v2 = (a) => new THREE.Vector2(a, a);
-  MAT.brass = S({ color: 0xcfa650, metalness: 1, roughness: 0.6, map: TEX.patina, roughnessMap: TEX.patinaR, normalMap: TEX.micro, normalScale: v2(0.3) });
-  MAT.bronze = S({ color: 0x8f6c38, metalness: 1, roughness: 0.7, map: TEX.patina, roughnessMap: TEX.patinaR, normalMap: TEX.micro, normalScale: v2(0.34) });
-  MAT.copper = S({ color: 0xc46a3c, metalness: 1, roughness: 0.55, roughnessMap: TEX.patinaR });
-  MAT.steel = S({ color: 0x8f959d, metalness: 1, roughness: 0.66, roughnessMap: TEX.patinaR, normalMap: TEX.micro, normalScale: v2(0.22) });
-  MAT.iron = S({ color: 0x2e3135, metalness: 0.85, roughness: 0.62 });
-  MAT.rail = S({ color: 0x25272b, metalness: 0.9, roughness: 0.45 });
-  MAT.rivet = S({ color: 0x7a6238, metalness: 1, roughness: 0.42 });
-  MAT.handrail = S({ color: 0xb98a3c, metalness: 1, roughness: 0.36 });       // brass, polished by hands
-  MAT.brick = S({ map: TEX.brick, normalMap: TEX.brickN, normalScale: v2(1.2), roughness: 0.93, metalness: 0 });
-  MAT.plate = S({ map: TEX.plate, normalMap: TEX.plateN, normalScale: v2(1.1), roughnessMap: TEX.plateR, roughness: 0.95, metalness: 0.7 });
+  // Generated surfaces (see surface/): colour is the tint of the metal or the paint.
+  const tarnish = [0.62, 0.5, 0.4, 0.55];                           // brass going brown where nobody polishes it
+  MAT.brass = surface('brass', { color: 0xcfa650, age: tarnish, macro: [0.1, 0.1, 0.35, 0.2] });
+  MAT.bronze = surface('brass', { color: 0x8f6c38, roughness: 1.2, p: [0.35, 0, 0, 0], seed: 1, age: tarnish, macro: [0.12, 0.1, 0.5, 0.25] });
+  MAT.copper = surface('brass', { color: 0xc46a3c, p: [0.15, 0, 0, 0], seed: 2, age: [0.55, 0.6, 0.52, 0.45], macro: [0.1, 0.1, 0.12, 0.25] });
+  MAT.steel = surface('steel', { color: 0x9aa0a8, age: [0.55, 0.45, 0.38, 0.5] });
+  MAT.iron = surface('iron', { color: 0x30343a, age: [0.8, 0.7, 0.6, 0.35], macro: [0.1, 0.08, 0.5, 0.2] });
+  MAT.rail = surface('iron', { color: 0x222428, roughness: 0.85, seed: 1 });
+  MAT.rivet = surface('brass', { color: 0x8a6f40, p: [0.3, 0, 0, 0], seed: 3 });
+  MAT.handrail = surface('brass', { color: 0xc9983f, roughness: 0.8, p: [-0.4, 0, 0, 0], seed: 4 });       // polished by hands
+  MAT.brick = surface('brick', { macro: [0.22, 0.08, 0.22, 0.3], wall: [0.4, 2.5, 0.5, 0.45], age: [0.5, 0.5, 0.52, 0.8] });
+  MAT.stone = surface('stone', { macro: [0.18, 0.08, 0.3, 0.3], wall: [0.5, 1.5, 0, 0] });
+  MAT.plate = surface('plate', { macro: [0.2, 0.14, 0.12, 0.5], age: [0.6, 0.5, 0.42, 0.6] });
   MAT.grate = S({ map: TEX.grate, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.5, metalness: 0.85 });
   MAT.lattice = S({ map: TEX.lattice, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.5, metalness: 0.8 });
   MAT.turntable = S({ map: TEX.turntable, metalness: 0.9, roughness: 0.5, normalMap: TEX.micro, normalScale: v2(0.3) });
-  MAT.stone = S({ color: 0x6d6459, roughness: 1 });
   MAT.slate = S({ color: 0x25282d, roughness: 0.8, metalness: 0.2 });
   MAT.ground = S({ color: 0x2d2924, roughness: 1 });
   MAT.city = S({ map: TEX.facade, emissive: 0xffffff, emissiveMap: TEX.facadeLit, emissiveIntensity: 1.1, roughness: 0.95 });
@@ -273,8 +245,9 @@ function makeMaterials() {
   MAT.fire = new THREE.MeshBasicMaterial({ color: new THREE.Color(4, 1.1, 0.25) });
 }
 
-export function initKit(scene, world, RAPIER) {
+export function initKit(scene, world, RAPIER, renderer) {
   G.scene = scene; G.world = world; G.R = RAPIER;
+  initSurfaces(renderer);
   makeTextures(); makeMaterials();
 }
 
@@ -289,8 +262,52 @@ function treadGeo() {
   }
   return g;
 }
+// A unit box with every edge chamfered. Each corner has three vertices, one per face it
+// touches, all at the corner; the material's vertex shader pulls each one back along the
+// other two axes by a fixed distance in metres (see surface/material.js), so the chamfer
+// stays the same width however the box is stretched. The vertices keep their face's
+// normal, so light rolls round the edge instead of snapping from one face to the next.
+function chamferBoxGeo() {
+  const pos = [], nor = [], bev = [], idx = [];
+  const corner = (c) => ((c[0] > 0 ? 1 : 0) | (c[1] > 0 ? 2 : 0) | (c[2] > 0 ? 4 : 0));
+  const id = (c, axis) => corner(c) * 3 + axis;
+  for (let k = 0; k < 8; k++) {
+    const c = [k & 1 ? 1 : -1, k & 2 ? 1 : -1, k & 4 ? 1 : -1];
+    for (let a = 0; a < 3; a++) {
+      pos.push(c[0] / 2, c[1] / 2, c[2] / 2);
+      nor.push(a === 0 ? c[0] : 0, a === 1 ? c[1] : 0, a === 2 ? c[2] : 0);
+      bev.push(a === 0 ? 0 : c[0], a === 1 ? 0 : c[1], a === 2 ? 0 : c[2]);
+    }
+  }
+  // where a vertex ends up with a nominal chamfer, used only to get the winding right
+  const at = (i) => new THREE.Vector3(pos[i * 3] - bev[i * 3] * 0.1, pos[i * 3 + 1] - bev[i * 3 + 1] * 0.1, pos[i * 3 + 2] - bev[i * 3 + 2] * 0.1);
+  const tri = (a, b, c) => {
+    const A = at(a), B = at(b), C = at(c), n = B.clone().sub(A).cross(C.clone().sub(A));
+    if (n.dot(A.add(B).add(C)) < 0) idx.push(a, c, b); else idx.push(a, b, c);
+  };
+  const quad = (a, b, c, d) => { tri(a, b, c); tri(a, c, d); };
+  for (let a = 0; a < 3; a++) {
+    const b = (a + 1) % 3, c = (a + 2) % 3;
+    for (const s of [-1, 1]) {                                           // faces
+      const v = (sb, sc) => { const p = [0, 0, 0]; p[a] = s; p[b] = sb; p[c] = sc; return id(p, a); };
+      quad(v(-1, -1), v(1, -1), v(1, 1), v(-1, 1));
+    }
+    for (const sb of [-1, 1]) for (const sc of [-1, 1]) {                // edges running along axis a
+      const v = (sa, axis) => { const p = [0, 0, 0]; p[a] = sa; p[b] = sb; p[c] = sc; return id(p, axis); };
+      quad(v(-1, b), v(1, b), v(1, c), v(-1, c));
+    }
+  }
+  for (let k = 0; k < 8; k++) tri(k * 3, k * 3 + 1, k * 3 + 2);          // corners
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('sfBevel', new THREE.Float32BufferAttribute(bev, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(48), 2));
+  g.setIndex(idx);
+  return g;
+}
 const UNIT = {
-  box: new THREE.BoxGeometry(1, 1, 1),
+  box: chamferBoxGeo(),
   cyl: new THREE.CylinderGeometry(1, 1, 1, 48),
   sph: new THREE.SphereGeometry(1, 16, 12),
   // light versions for the thousands of small parts in railings, stairs and lamps
@@ -345,7 +362,7 @@ export function boxGeo(sx, sy, sz, tile = 4) {
   return g;
 }
 export function tbox(material, sx, sy, sz, x, y, z, tile = 4, collide = true) {
-  const m = new THREE.Mesh(boxGeo(sx, sy, sz, tile), material); m.position.set(x, y, z); G.scene.add(m);
+  const m = new THREE.Mesh(boxGeo(sx, sy, sz, tile).translate(x, y, z), material); G.scene.add(m);   // position baked in: surfaces are laid out in world space
   if (collide) cbox(sx, sy, sz, x, y, z);
   return m;
 }

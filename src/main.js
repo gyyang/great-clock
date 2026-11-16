@@ -21,7 +21,7 @@ async function main() {
 
   const canvas = $('view');
   const env = createEnv(canvas);
-  initKit(env.scene, world, RAPIER);
+  initKit(env.scene, world, RAPIER, env.renderer);
   buildTower();
   const clock = buildClockwork();
   const engine = buildEngine(clock, env.scene);
@@ -173,7 +173,13 @@ async function main() {
 
   // handy from the console
   window.__game = { RAPIER, player, clock, engine, props, env, world, sound, go, SPOTS,
-    advance: (sec) => { for (let i = 0; i < sec / DT; i++) { clock.update(DT); engine.update(DT); props.step(); player.step(DT); world.step(); } }, look: (yaw, pitch) => { player.yaw = yaw; player.pitch = pitch; } };
+    advance: (sec) => { for (let i = 0; i < sec / DT; i++) { clock.update(DT); engine.update(DT); props.step(); player.step(DT); world.step(); } }, look: (yaw, pitch) => { player.yaw = yaw; player.pitch = pitch; },
+    // stand at p, look along (yaw, pitch) and draw one frame: for screenshots while the page is in the background
+    shot: (p, yaw, pitch = 0) => {
+      player.teleport(p, yaw, pitch); player.updateCamera(env.camera, 0.016);
+      for (let i = 0; i < 40; i++) env.update(0.1, player.position);
+      engine.frame(0.016); props.sync(); env.render();
+    } };
 }
 
 main().catch((err) => {

@@ -36,6 +36,15 @@ Then open the URL it prints.
 - **Everything is solid** – every tooth of every wheel, the pendulum and its rating nut, the engine's crank and connecting rod are moving colliders. Stand in a tooth's way and it hits you at the speed it is travelling (about 5 m/s at the rim of the floor wheels). Go down between two meshing wheels and you do not come out.
 - **Loose things** – crates, barrels and brass shot are ordinary rigid bodies. Shove them, stack them, roll them into the teeth. The pendulum's nut knocks over whatever stands in its path; a turning wheel carries what stands on it for as long as friction can supply the centripetal force (μ·g) and throws it off beyond that.
 
+### What you see
+
+There are no image, model or sound files: everything is generated when the page loads.
+
+- **Surfaces** – each material is a small program (`src/surface/recipes.js`) run once on the graphics card: real-size bricks with their own colour and height, lime mortar, soot; cast iron with chipped paint and rust weeping from the chips; brass that is bright where it is handled and brown where it is not. They are laid onto every part in true metres, so nothing stretches, and a second layer of variation in world space (water streaks, rising damp, rebuilt patches, soot under the roof) keeps a 240 m wall from looking like one tile repeated.
+- **Light shafts** – daylight through the dial is marched through the air against the same shadow map that lights the hall, so the beams carry the shadows of the hands, the tracery and every wheel they pass.
+- **Edges** – every box has a chamfer a centimetre wide that catches the light, whatever its size.
+- **Grade** – filmic tone curve, cool shadows and warm highlights, vignette and grain.
+
 ### Things to try
 
 The regulator (key 7, then walk up to the lever) has four notches: shut, half, full, and full with the
@@ -53,13 +62,19 @@ index.html            page, overlay, HUD
 src/
   main.js             start-up, input, HUD, the fixed-step loop
   layout.js           every dimension, in metres
-  kit.js              materials, procedural textures, instanced primitives, walkways and rails
+  kit.js              materials, instanced primitives (chamfered boxes), walkways and rails
+  surface/
+    glsl.js           tileable noise and the output packing every surface recipe shares
+    recipes.js        brick, stone, painted iron, brass, steel, floor plate: one GLSL function each
+    generate.js       bakes a recipe to colour, normal and roughness/metal/occlusion maps on the GPU
+    material.js       the material that wears them: projected in metres, varied in world space
   player.js           the character's physics
   audio.js            all sound, synthesised
   world/
     tower.js          the building and the city outside
     props.js          loose crates, barrels and shot
-    env.js            renderer, light, shadow, haze, sky, post-processing
+    env.js            renderer, light, shadow, haze, sky
+    post.js           ambient occlusion, light shafts, bloom, film grade
   clock/
     clockwork.js      pendulum, escapement, going train, hands, floor wheels, lifts, and their simulation
     gears.js          tooth geometry, colliders, mesh phasing
@@ -74,4 +89,4 @@ Simulation code never draws and drawing code never integrates: `clock/clockwork.
 `engine/physics.js` advance on a fixed 1/120 s step, and everything visible is posed from their state.
 Rigid-body contact (you, the props, every moving part) is Rapier's.
 From the browser console, `__game` exposes the player, clock, engine and a few helpers
-(`__game.advance(seconds)` fast-forwards the simulation).
+(`__game.advance(seconds)` fast-forwards the simulation; `__game.shot(position, yaw, pitch)` draws one frame from a viewpoint).
