@@ -217,7 +217,7 @@ export const WIND = {
   z: 32.6,                 // plane of the winding wheel on the great arbor, and of the worms and upright shafts that drive it
   wheelR: 8.0, teeth: 80,  // the winding wheel: a worm wheel, loose on the arbor until its clutch goes in. Its teeth carry the whole weight: 200 mm module
   wormR: 1.1,              // pitch radius of the worms, which stand at three o'clock and nine (a 5 degree lead, which the weight could drive backward: the clicks hold it)
-  weightR: 4.5, weightH: 5.6,          // the driving weight: 2,560 t of cast iron; what sets it is the wind on the hands (clockwork.js)
+  weightR: 4.5, weightH: 5.6,          // the driving weight: 2,565 t of cast iron; what sets it is the wind on the hands (clockwork.js)
   shaftY: 5.2,             // height of the line shaft over the floor
   barrelR: 5, top: 72, band: 2,        // the weight's top: where winding stops, and how far it falls before winding starts
   efficiency: 0.6,         // of the whole winding train; nearly all the loss is in the worms

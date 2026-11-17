@@ -1,8 +1,8 @@
 // The engineer. Stands the going train on the floor and hangs the walkways from the
 // roof, sizing every member by analysis and drawing it at the size the analysis gave.
 //
-// The wheels are solid brass and weigh what that weighs: about 84,000 tonnes with their
-// arbors, the pendulum and the driving weight. That goes straight down, in compression:
+// The wheels are fabricated (steel centres, bronze rims) and weigh what they are drawn as; with their
+// arbors, the pendulum and the driving weight that goes straight down, in compression:
 //   - an arbor rests in two bearings;
 //   - under each bearing stands an A-frame of alloy-steel box sections, in the gap
 //     between two layers of wheels: two legs from the bearing to the floor, tied and
@@ -13,7 +13,7 @@
 // pendulum or the fall of the driving weight, it is left out (found by casting rays
 // through the physics world), and the members that remain are sized for the frame that
 // is actually there.
-// The roof carries only itself and the walkways, which hang from it on carbon-fibre rods.
+// The roof carries only itself and the walkways, which hang from it on steel bars.
 //
 // The shell is a steel frame with brick between. Columns stand every 10 m in each wall and a
 // girder runs round at every 30 m level; each girder carries the 30 m of brick panel above
@@ -24,10 +24,10 @@
 // designLoop() declares all of that to the structural model, runs the analysis, enlarges
 // whatever is overworked and repeats until everything holds. Only then is it drawn.
 import * as THREE from 'three';
-import { G, DRAWN, ibox, icyl, iknob, sbox, beam, sbeam, tube } from '../kit.js';
+import { G, DRAWN, ibox, icyl, iknob, ipart, sbox, beam, sbeam, tube } from '../kit.js';
 const _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _c = new THREE.Vector3();
 import { TOWER, ARBOR, SHAFT, ROOF, PEND, DIAL, LIFT, BRIDGES, LAYER, WIND, ARCH, STAIR_TOWER, ESCAPE, STACK, LAMP } from '../layout.js';
-import { assembly, redeclare, getAssembly, analyse, report, displacement, SECTION, MATERIAL, GRAVITY, WIND_Q, BUCKLING_FACTOR } from '../structure/model.js';
+import { assembly, redeclare, forget, getAssembly, allAssemblies, analyse, report, displacement, sensitivity, frameOf, footSprings, plies, SECTION, BRACE_SECTION, MATERIAL, GRAVITY, WIND_Q, windAt, cpe, WINDS, LIVE, liveCase, setOpening, COMBOS, BUCKLING_FACTOR, DAM, PHI, QUAKE, ALPHA, WARM, GROUND, STITCH, FATIGUE, ROTATING } from '../structure/model.js';
 import { MESH_STONE, stackR, stackWall, STACK_RINGS } from './facade.js';
 import { ENVELOPES, WINDGEAR, LIFTGEAR, POWER, ROPE, MAINT } from '../clock/clockwork.js';
 import { DOOR_LEAVES, leafBox } from './doors.js';
@@ -35,13 +35,17 @@ import { HOISTGEAR } from './hoist.js';
 import SEED from '../structure/design.json';
 
 export const EDGES = [];            // edges of crossings that want hanging: { name, y, yc, z }, filled by tower.js
-// The lamp room's floor and its gallery, kg per square metre: an iron floor (150) and the people on it (400). The
-// inner half of the floor is on its own frame (tower.js, 'lamp floor'); the outer half and the gallery are on the drum.
-export const LAMP_FLOOR = 550;
-const ALLOY = MATERIAL.alloy, TENDON = MATERIAL.tendon;
+// The lamp room's floor and its gallery, kg per square metre: an iron floor. The people on it are a live load (LIVE).
+// The inner half of the floor is on its own frame (tower.js, 'lamp floor'); the outer half and the gallery are on the drum.
+export const LAMP_FLOOR = 150;
+const ALLOY = MATERIAL.alloy, BAR = MATERIAL.bar, CAST = MATERIAL.castSteel;
+// The dial is the one opening that could be lost (its glass broken): the inside then takes the pressure outside it.
+setOpening([0, 0, 1]);
 const TRUSS_Z = [-32, -16, 0, 16, 32];
 const PAD = 0.4;                                   // height of the stone pad a trestle's foot stands on
-const BAY = 18, FOOT = 0.6, DEPTH = 0.9;          // tie spacing; top of a plinth; how thick a frame is where it passes between wheels
+const LINK_GAP = 8;                 // how far apart two towers' frames may be for a link between their legs (an 0.8 m box, pinned at both ends)
+const TIE_SIZES = [[2.4, 1.6], [2.0, 1.6], [2.4, 1.2], [2.0, 1.2], [1.6, 1.2], [2.4, 0.9], [2.0, 0.9], [1.6, 0.9], [1.2, 0.9]];       // a tie beam's depth and thickness, best first
+const BAY = 18, FOOT = 0.6, DEPTH = 0.9, PLAN_B = 0.8;          // tie spacing; top of a plinth; how thick a frame is where it passes between wheels; the largest a plan brace may grow to
 const THICK = [3.0, 2.2, 1.6, 1.2, DEPTH];        // thicknesses a leg may have, best first
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
@@ -75,9 +79,9 @@ function boxIndex(list, CELL = 6) {
   return { list, hit(me) { const stamp = ++boxStamp; let found = null; cells(me.lo, me.hi, (key) => { if (found) return; for (const o of grid.get(key) || []) { if (o._seen === stamp) continue; o._seen = stamp; if (overlaps(me, o)) { found = o; return; } } }); return found; } };
 }
 
-const SOLID = new Set(['leg', 'tie beam', 'brace', 'strut', 'trestle', 'post', 'jib', 'yoke', 'yoke arm', 'lever bracket', 'steady', 'lift head', 'link', 'detent', 'wind truss', 'ring truss']);       // what is drawn solid, and tested for clearance
+const SOLID = new Set(['leg', 'tie beam', 'brace', 'strut', 'plan brace', 'trestle', 'post', 'jib', 'yoke', 'yoke arm', 'lever bracket', 'steady', 'lift head', 'link', 'detent', 'head beam', 'head brace', 'wind truss', 'ring truss', 'damper']);       // what is drawn solid, and tested for clearance
 let plan = '';
-let towers = [], hung = [], sizes = new Map(), passes = 0, feet = [], solids = [], bearings = [], wind = null, links = [], detent = null, dialDrawn = [];
+let towers = [], hung = [], dampers = new Map(), damperParts = [], sizes = new Map(), passes = 0, feet = [], solids = [], bearings = [], wind = null, links = [], detent = null, dialDrawn = [];
 
 // ---- geometry of two segments: how near they come
 function gap(p1, q1, p2, q2) {
@@ -87,6 +91,53 @@ function gap(p1, q1, p2, q2) {
   let s = den > 1e-9 ? clamp((b * f - c * e) / den, 0, 1) : 0, t = (b * s + f) / e;
   if (t < 0) { t = 0; s = clamp(-c / a, 0, 1); } else if (t > 1) { t = 1; s = clamp((b - c) / a, 0, 1); }
   return Math.hypot(...p1.map((v, i) => v + d1[i] * s - p2[i] - d2[i] * t));
+}
+
+// How far a line shaft's span may sag between its bearings: 1/SAG of it (0.01 inch to the foot, the rule for line
+// shafting, Machinery's Handbook). The longest span a shaft of radius r may have for its own weight, so sagging (as if
+// simply supported, 5 w L^4 / 384 E I) and so bent while it turns, with a tenth in hand for its wheels: what its trestles
+// are planned to; the check has the shaft as it is, wheels and all.
+const SAG = 1200, OVERHANG = 2.5;       // (and how far a wheel may hang out beyond a shaft's last bearing before it is given another, outside it)
+function shaftSpan(r) {
+  const M = MATERIAL.alloy, w = M.rho * GRAVITY * Math.PI * r * r, I = Math.PI * r ** 4 / 4, R = ROTATING;
+  return 0.9 * Math.min(Math.cbrt(384 * M.E * I / (5 * SAG * w)), Math.sqrt(8 * R.Se / (R.Kf * R.gamma) * I / r / w));
+}
+// x of a crossing's cross beams, end to end: one under every vertical of its lattice, four to a purlin's bay
+function deckBeams() {
+  const P = 8.75 / 4, xs = [-65, 65];
+  for (let x = ROOF.purlins[0] + Math.ceil((-65 - ROOF.purlins[0]) / P) * P; x < 65; x += P) if (x > -65) xs.push(x);
+  return xs.sort((p, q) => p - q);
+}
+// A crossing's damper (see swayStable): a block of steel DAMPER.block wide hung on four rods 40 mm across from a yoke, the
+// yoke on a post down from the middle of a cross beam, past the plan bracing; and either side of the block, across its
+// swing, a dashpot from it to an arm down from the yoke. The rods hang it as a parallelogram, so it swings without
+// turning, a pendulum as long as they are: g / (2 pi f)^2 for the frequency f it is tuned to. The room kept for it under a
+// deck: DAMPER.long along the deck, DAMPER.wide across, DAMPER.drop deep, from DAMPER.below under the deck (under its plan
+// bracing and plan chords); the biggest block that fits, DAMPER.most kg.
+const DAMPER = { below: 0.6, long: 3.0, wide: 1.3, drop: 2.4, block: 0.5, rho: 7850 };
+DAMPER.most = DAMPER.rho * DAMPER.block * 1.0 * (DAMPER.long - 0.1);
+// A stair tower's damper (see vortex): a block of steel hung as a pendulum in the base of its spire, over the stone
+// roof of the stage under it. Four posts stand on two girders laid across the roof from side wall to side wall, a square
+// SPIRE.P either side of the middle; a frame of beams on their heads, and a cross of beams in it, from which the block
+// hangs on four rods 60 mm across, at the cross's arms, so that it swings without turning, a pendulum as long as they are
+// (g / (2 pi f)^2 for the frequency f it is tuned to); a rail between the posts in each face at the block's middle, and
+// from it a dashpot to the middle of the block's face: two each way. The block is square, as wide as SPIRE.side at most
+// and as high as it needs, at most SPIRE.high: the most it can be, SPIRE.most kg. (A sloshing tank was the other way:
+// the left tower already has one. Tuned to 0.27 Hz, a tank's cells have to be 8 m long and 2.5 m deep, and only five
+// eighths of their water sloshes: three times the weight on the tower's head for the same effect, and the fire tank's
+// 35 t is a sixth of what is wanted.)
+const SPIRE = { P: 3.25, side: 4.0, high: 2.4, clear: 0.5, rod: 0.03, rho: 7850 };
+SPIRE.most = SPIRE.rho * SPIRE.side * SPIRE.side * SPIRE.high;
+function spireDamper(name, kg, hz, gh, hh) {
+  const S = STAIR_TOWER, sx = name.endsWith('left') ? -1 : 1, V = kg / SPIRE.rho, side = clamp(Math.sqrt(V / 1.6), 1.5, SPIRE.side), high = V / (side * side);
+  const floor = S.top + 0.4, Lp = GRAVITY / (2 * Math.PI * hz) ** 2, yb = floor + gh + SPIRE.clear + high / 2, yh = yb + high / 2 + Lp;
+  return { sx, cx: sx * (S.x0 + S.x1) / 2, cz: (S.z0 + S.z1) / 2, side, high, Lp, yb, yh, gy: floor + gh / 2, hy: yh + hh / 2, a: side / 2 - 0.3 };
+}
+function damperShape(dm, kg, hz) {
+  const V = kg / DAMPER.rho, bz = DAMPER.block, by = clamp(V / (bz * 2.0), 0.3, 1.0), bx = V / (by * bz), Lp = GRAVITY / (2 * Math.PI * hz) ** 2;
+  const yoke = bx + 0.3, yb = dm.top - 0.25 - Lp - by / 2, arm = bz / 2 + 0.3, armL = dm.top - 0.25 - yb + 0.1, post = DAMPER.below - 0.34;
+  const frameKg = DAMPER.rho * (0.05 * yoke + 0.0128 * post + 2 * 0.0144 * armL + 4 * Math.PI * 0.02 * 0.02 * Lp);
+  return { bx, by, bz, Lp, yb, yoke, arm, frameKg };
 }
 
 export function buildStructure() {
@@ -109,10 +160,12 @@ export function buildStructure() {
   // already there? Rays down its middle and well outside its edges (a tooth that is clear now
   // will not be in a minute), and the places nothing may stand.
   let self = null;                                    // the arbor whose tower is being planned: its legs end under it
-  const fouls = (a, b, h, w) => {
+  // (With `under`, a beam that stands right under an arbor, its top up to the arbor's bearing: the rays above and below
+  // it are not cast, and it is tested at its own size, against colliders, what is drawn and what turns.)
+  const fouls = (a, b, h, w, under = false) => {
     const d = b.map((v, i) => v - a[i]), L = Math.hypot(...d), along = Math.abs(d[2]) / L > 0.3;
     const p = along ? [1, 0, 0] : [-d[1] / L, d[0] / L, 0], q = along ? [0, 1, 0] : [0, 0, 1];
-    for (const [op, oq] of [[0, 0], [h / 2 + 0.7, 0], [-h / 2 - 0.7, 0], [0, w / 2 + 0.1], [0, -w / 2 - 0.1]])
+    for (const [op, oq] of under ? [[0, 0], [0, w / 2 + 0.1], [0, -w / 2 - 0.1]] : [[0, 0], [h / 2 + 0.7, 0], [-h / 2 - 0.7, 0], [0, w / 2 + 0.1], [0, -w / 2 - 0.1]])
       if (ray(a.map((v, i) => v + p[i] * op + q[i] * oq), b.map((v, i) => v + p[i] * op + q[i] * oq))) return true;
     // and a box the size of the member itself, for things too thin for a ray to find (a handrail)
     if (L > 1.2) {
@@ -193,36 +246,58 @@ export function buildStructure() {
     const pool = wide.filter(q => q.n >= top - 2), fifth = pool.filter(q => q.base >= 0.2 - 1e-9);
     const best = wide.length ? (fifth.length ? fifth : pool).sort((p, q) => p.rank - q.rank)[0] : pairs.sort((p, q) => q.base - p.base)[0];
     const s = { '-1': best.l, '1': best.r };
-    const at = (side, y, z) => [a.x + side * s[side] * yh * (yh - y) / (yh - FOOT), y, z];
-    const T = { name: `tower ${name}`, arbor: name, a, r: sh.r, yh, planes: sh.bearings, loads, s, legs: [], feet: [], ties: [], braces: [], struts: [], stayed: {}, at, levels, half };
-    // each leg in pieces from joint to joint, each piece as thick as its place between the wheels allows
-    const ys = [FOOT, ...levels, yh];
+    // The frame the maintaining detent stands in (1c) is asked for the couple that holds the maintaining ring, as a push
+    // at its bearing and the opposite push at the detent, 8 to 10 m below it. Where an A-frame's legs run together
+    // under its bearing they are too steep to hold a push there without moving: so in that frame the legs go straight up
+    // from the last tie beam, as far apart as they are there, to a head beam that the bearing stands on, and the panel
+    // between the head beam and the detent is braced across (headX, planned with the detent).
+    // (The head beam is as deep as HEAD_H, its top level with the frame's head; if it will not pass, the frame keeps its
+    // A-frame head.)
+    const kink = levels[levels.length - 1], hy = yh - HEAD_H / 2;
+    const line = (side, y, z) => [a.x + side * s[side] * yh * (yh - y) / (yh - FOOT), y, z];
+    let headZ = MAINT_ARBOR === name ? sh.bearings[0] : null;
+    if (headZ !== null) {
+      const p = [line(-1, kink, headZ)[0], hy, headZ], q = [line(1, kink, headZ)[0], hy, headZ], swept = sweepOf(a);
+      if (fouls(p, q, HEAD_H, DEPTH, true) || swept(memberBox(p, q, HEAD_H, DEPTH)) || taken(p, q, HEAD_H, DEPTH, name)) headZ = null;
+    }
+    const at = (side, y, z) => z === headZ && y > kink ? [line(side, kink, z)[0], y, z] : line(side, y, z);
+    const T = { name: `tower ${name}`, arbor: name, a, r: sh.r, yh, planes: sh.bearings, loads, s, legs: [], feet: [], ties: [], braces: [], struts: [], stayed: {}, at, levels, half, headZ, kink, hy, head: null, headX: [] };
+    // each leg in pieces from joint to joint, each piece as thick as its place between the wheels allows. The last
+    // piece, just under the bearing, may be no thicker than leaves the nut on the arbor's end clear of it; but the nut
+    // is only near the arbor, so the leg is jointed where it comes within reach of it (the arbor's envelope and the
+    // leg's own half depth, with a metre to spare), and only the piece above that is held thin.
+    const near = a.y - 1.35 * sh.r - LEG_H / 2 - 1.0, ys = [FOOT, ...levels, ...(near - levels[levels.length - 1] > 3 && yh - near > 1 ? [near] : []), yh];
     for (const side of [-1, 1]) for (const z of sh.bearings) {
       T.feet.push(at(side, FOOT, z));
-      for (let k = 0; k < ys.length - 1; k++) {
-        const p = at(side, ys[k], z), q = at(side, ys[k + 1], z);
-        // (under the bearing, no thicker than leaves the nut on the arbor's end clear of it)
-        const cap = k === ys.length - 2 ? 2 * (Math.min(Math.abs(z - sh.z[0]), Math.abs(z - sh.z[1])) - 0.45) : 9;
-        T.legs.push([p, q, 0, THICK.find(t => t <= room(z) && t <= cap && !fouls(p, q, LEG_H, t) && !taken(p, q, LEG_H, t, name)) ?? DEPTH, side, ys[k], ys[k + 1]]);
+      const yz = z === headZ ? [FOOT, ...levels, hy] : ys;              // (the head frame's legs end at its head beam, well away from the nut)
+      for (let k = 0; k < yz.length - 1; k++) {
+        const p = at(side, yz[k], z), q = at(side, yz[k + 1], z);
+        const cap = z !== headZ && yz[k + 1] > near ? 2 * (Math.min(Math.abs(z - sh.z[0]), Math.abs(z - sh.z[1])) - 0.45) : 9;
+        T.legs.push([p, q, 0, THICK.find(t => t <= room(z) && t <= cap && !fouls(p, q, LEG_H, t) && !taken(p, q, LEG_H, t, name)) ?? DEPTH, side, yz[k], yz[k + 1]]);
       }
     }
     for (const m of T.legs) placed.push({ a: m[0], b: m[1], owner: name, box: memberBox(m[0], m[1], LEG_H, m[3]) });
+    if (headZ !== null) {        // the head beam, from leg to leg under the bearing (tested clear above)
+      const p = at(-1, hy, headZ), q = at(1, hy, headZ);
+      T.head = [p, [a.x, hy, headZ], q]; placed.push({ a: p, b: q, owner: name, box: memberBox(p, q, HEAD_H, DEPTH) });
+    }
     stood.push(...T.feet);
     towers.push(T);
   }
-  // Where a leg of one tower crosses a leg of another in the next gap along, the two are bolted together through a
-  // distance piece. Neither can then bow out of its own plane there without taking the other with it, and the other
+  // Where a leg of one tower crosses a leg of another in the next gap along (frames up to LINK_GAP apart), the two are
+  // bolted together through a distance piece. Neither can then bow out of its own plane there without taking the other with it, and the other
   // is held by its own struts: so each is a stay to the other (and is designed for the push that asks of it).
   self = null; links = [];
   for (let i = 0; i < towers.length; i++) for (let j = i + 1; j < towers.length; j++) {
     const A = towers[i], B = towers[j];
     for (const za of A.planes) for (const zb of B.planes) {
-      if (Math.abs(za - zb) > 6 || Math.abs(za - zb) < 0.5) continue;
+      if (Math.abs(za - zb) > LINK_GAP || Math.abs(za - zb) < 0.5) continue;
       for (const sa of [-1, 1]) for (const sb of [-1, 1]) {
         const qA = -sa * A.s[sa] * A.yh / (A.yh - FOOT), qB = -sb * B.s[sb] * B.yh / (B.yh - FOOT), pA = A.a.x - qA * A.yh, pB = B.a.x - qB * B.yh;      // x = p + q y along each leg
         if (Math.abs(qA - qB) < 1e-6) continue;
         const y = (pB - pA) / (qA - qB);
         if (y < 6 || y > Math.min(A.yh, B.yh) - 6) continue;
+        if ((za === A.headZ && y > A.kink) || (zb === B.headZ && y > B.kink)) continue;      // (a head frame's legs leave that line above its last tie)
         const a = A.at(sa, y, za), b = B.at(sb, y, zb), me = memberBox(a, b, 0.8, 0.8);
         if (!fouls(a, b, 0.8, 0.8) && !placed.some(m => m.owner !== A.arbor && m.owner !== B.arbor && overlaps(me, m.box))) links.push({ a, b, A, B, sa, sb, y });      // (nor through a third tower's leg)
       }
@@ -233,11 +308,14 @@ export function buildStructure() {
   for (const T of towers) {
     const { at, levels, arbor: name } = T; self = T.a;
     for (const z of T.planes) levels.forEach((y, k) => {
-      if (!fouls(at(-1, y, z), at(1, y, z), 1.2, DEPTH) && !taken(at(-1, y, z), at(1, y, z), 1.2, DEPTH, name)) T.ties.push([at(-1, y, z), at(1, y, z)]);
+      // (planned at its least size, 1.2 m deep and DEPTH thick; enlarged into what room is left once everything else is placed)
+      const a = at(-1, y, z), b = at(1, y, z);
+      if (!fouls(a, b, 1.2, DEPTH) && !taken(a, b, 1.2, DEPTH, name)) T.ties.push([a, b, 1.2, DEPTH]);
       const up = levels[k + 1], [sa, sb] = k % 2 ? [1, -1] : [-1, 1];
       if (up && !fouls(at(sa, y, z), at(sb, up, z), 1.4, DEPTH) && !taken(at(sa, y, z), at(sb, up, z), 1.4, DEPTH, name)) T.braces.push([at(sa, y, z), at(sb, up, z)]);
     });
-    for (const m of [...T.ties, ...T.braces]) placed.push({ a: m[0], b: m[1], owner: name, box: memberBox(m[0], m[1], 1.4, DEPTH) });
+    for (const m of T.ties) { m.at = placed.length; placed.push({ a: m[0], b: m[1], owner: name, box: memberBox(m[0], m[1], m[2] + 0.2, m[3]) }); }
+    for (const m of T.braces) placed.push({ a: m[0], b: m[1], owner: name, box: memberBox(m[0], m[1], 1.4, DEPTH) });
   }
   for (const T of towers) {
     const { at, half, yh, arbor: name } = T, [z1, z2] = T.planes; self = T.a;
@@ -255,6 +333,35 @@ export function buildStructure() {
       T.stayed[side] = stayed.map(y => Math.round(y)); (T.raw ||= {})[side] = stayed;
     }
     for (const m of T.struts) placed.push({ a: m[0], b: m[1], owner: name, strut: true, box: memberBox(m[0], m[1], 1.5, 1.1) });
+  }
+  // Plan bracing at the tie beams. A tie beam spans the width of its frame at that height (50 m low down in the widest
+  // towers) and is no thicker across the frame than the room between the wheels, so across the frame it is held only
+  // at its ends. Where both of a tower's frames have a tie at the same height, a strut joins the two ties' middles and
+  // two diagonals run to the far end of it from the ends of one tie: a horizontal truss between the frames, which holds
+  // both ties half way along against bowing out of their planes (the strut alone would not: the two would bow together).
+  for (const T of towers) {
+    const { at, levels, arbor: name } = T, [z1, z2] = T.planes; self = T.a;
+    T.plan = [];
+    for (const y of levels) {
+      const tied = (z) => T.ties.some(m => Math.abs(m[0][1] - y) < 0.01 && Math.abs(m[0][2] - z) < 0.01);
+      if (!tied(z1) || !tied(z2)) continue;
+      const xm = (at(-1, y, z1)[0] + at(1, y, z1)[0]) / 2, mid = (z) => [xm, y, z];
+      for (const [za, zb] of [[z1, z2], [z2, z1]]) {
+        const set = [[mid(za), mid(zb)], [at(-1, y, za), mid(zb)], [at(1, y, za), mid(zb)]];
+        if (set.every(([p, q]) => !fouls(p, q, PLAN_B, PLAN_B) && !taken(p, q, PLAN_B, PLAN_B, name))) { T.plan.push(...set); break; }
+      }
+    }
+    for (const m of T.plan) placed.push({ a: m[0], b: m[1], owner: name, box: memberBox(m[0], m[1], PLAN_B, PLAN_B) });
+  }
+  // Then each tie beam as big as the room left where it runs allows: thicker across its frame first (as thick as a leg
+  // there may be), then deeper in it. A long tie is held across its frame only at its ends, and only its own size
+  // stiffens it there.
+  for (const T of towers) {
+    self = T.a;
+    for (const m of T.ties) {
+      const z = m[0][2], best = TIE_SIZES.find(([h, w]) => w <= room(z) && !fouls(m[0], m[1], h, w) && !taken(m[0], m[1], h + 0.2, w, T.arbor)) ?? [m[2], m[3]];
+      m[2] = best[0]; m[3] = best[1]; placed[m.at].box = memberBox(m[0], m[1], m[2] + 0.2, m[3]);
+    }
   }
   // how far each piece of each leg runs without a stay from front to back: its own tower's struts, and the links to a
   // neighbour wherever that neighbour is itself strutted within 14 m
@@ -275,15 +382,74 @@ export function buildStructure() {
     const atG = (side, y) => [ax + side * Tg.s[side] * Tg.yh * (Tg.yh - y) / (Tg.yh - FOOT), y, zf];
     const free = (a, b, h = WG_H, w = WG_B) => !fouls(a, b, h, w) && !taken(a, b, h, w, 'winding') && !stood.some(f => Math.abs(f[0] - b[0]) < 3.4 && Math.abs(f[2] - b[2]) < 2.6);
     const ytop = W.lineY - 0.6, short = (a, b, cut) => { const L = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]); return b.map((v, i) => v - (v - a[i]) * cut / L); };
+    // The turning parts round the line shafts, as the points of their drawn surfaces (those the clearance check probes):
+    // a wheel's rim, a crown wheel under a shaft's end, a belt pulley. A shaft's own rod is left out, since that is
+    // what a bearing holds.
+    const CELL = 2, pts = new Map(), _v = new THREE.Vector3(), _s = new THREE.Sphere();
+    const xs = W.shafts.flatMap(sh => [sh.A1[0], sh.A1[0] + sh.d[0] * sh.len]), zs = W.shafts.flatMap(sh => [sh.A1[2], sh.A1[2] + sh.d[2] * sh.len]);
+    const lo = [Math.min(...xs) - 6, -1, Math.min(...zs) - 6], hi = [Math.max(...xs) + 6, W.lineY + 3, Math.max(...zs) + 6];
+    for (const grp of G.machines) { grp.updateWorldMatrix(true, true); grp.traverse((o) => {
+      if (!o.isMesh || o.isInstancedMesh || o.userData.ghost || o.userData.shaft) return;
+      if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+      _s.copy(o.geometry.boundingSphere).applyMatrix4(o.matrixWorld);
+      if ([0, 1, 2].some(i => _s.center.getComponent(i) + _s.radius < lo[i] || _s.center.getComponent(i) - _s.radius > hi[i])) return;
+      const pos = o.geometry.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        _v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+        const key = Math.floor(_v.x / CELL) + ',' + Math.floor(_v.y / CELL) + ',' + Math.floor(_v.z / CELL);
+        (pts.get(key) || pts.set(key, []).get(key)).push(_v.x, _v.y, _v.z);
+      }
+    }); }
+    const turning = (B) => {        // is any of them inside this box?
+      for (let i = Math.floor(B.lo[0] / CELL); i <= Math.floor(B.hi[0] / CELL); i++) for (let j = Math.floor(B.lo[1] / CELL); j <= Math.floor(B.hi[1] / CELL); j++) for (let k = Math.floor(B.lo[2] / CELL); k <= Math.floor(B.hi[2] / CELL); k++) {
+        const P = pts.get(i + ',' + j + ',' + k);
+        if (P) for (let n = 0; n < P.length; n += 3) if ([0, 1, 2].every(m => Math.abs((P[n] - B.c[0]) * B.ax[m][0] + (P[n + 1] - B.c[1]) * B.ax[m][1] + (P[n + 2] - B.c[2]) * B.ax[m][2]) < B.half[m])) return true;
+      }
+      return false;
+    };
     wind = { trestles: [], tips: [], steadies: [], head: [] };
-    for (const sh of W.shafts) {
-      const on = (t, y) => [sh.A1[0] + sh.d[0] * t, y, sh.A1[2] + sh.d[2] * t], yaw = Math.atan2(-sh.d[2], sh.d[0]), share = sh.kg / sh.bearings.length;
+    for (const [si, sh] of W.shafts.entries()) {
+      const on = (t, y) => [sh.A1[0] + sh.d[0] * t, y, sh.A1[2] + sh.d[2] * t], yaw = Math.atan2(-sh.d[2], sh.d[0]);
       const beside = (t, sg) => [sh.A1[0] + sh.d[0] * t - sh.d[2] * 1.7 * sg, PAD, sh.A1[2] + sh.d[2] * t + sh.d[0] * 1.7 * sg];
-      // a trestle under each bearing of a line shaft, moved along a little where something is in the way
-      const mine = [];
-      for (const t0 of sh.jib === false ? sh.bearings : sh.bearings.slice(1)) {
-        const t = [0, 1, -1, 2, -2, 3, -3, 4, -4].map(o => t0 + o).find(t => [-1, 1].every(sg => free(on(t, ytop), beside(t, sg))));
-        if (t !== undefined) { const tr = { top: on(t, ytop), feet: [beside(t, -1), beside(t, 1)], kg: share, yaw, t }; wind.trestles.push(tr); mine.push(tr); }
+      // a trestle under each bearing of a line shaft, moved along a little where something is in the way; where no
+      // trestle's legs will stand, a post straight down under the bearing, built in at its foot (a column bolted down to
+      // its pad, which holds the shaft sideways by bending)
+      const mine = [], place = (t0, offs) => {
+        // (the housing as it is drawn: 0.8 m along the shaft, 1.25 high, 1.0 across)
+        const housing = (t) => obb(on(t, W.lineY - 0.12), [sh.d, [0, 1, 0], [-sh.d[2], 0, sh.d[0]]], [0.45, 0.68, 0.55]);
+        const ok = (t) => t > 0.2 && t < sh.len - 0.2 && !mine.some(q => Math.abs(q.t - t) < 2.5) && !sh.masses.some(([tm]) => Math.abs(tm - t) < 0.45) && !turning(housing(t));
+        const leg = (t, f) => free(on(t, ytop), f) && !turning(memberBox(on(t, ytop), f, WG_H, WG_B));
+        let t = offs.map(o => t0 + o).find(t => ok(t) && [-1, 1].every(sg => leg(t, beside(t, sg)))), feet = t !== undefined && [beside(t, -1), beside(t, 1)];
+        if (t === undefined) { t = offs.map(o => t0 + o).find(t => ok(t) && leg(t, on(t, PAD))); feet = t !== undefined && [on(t, PAD)]; }
+        if (t !== undefined) { const tr = { top: on(t, ytop), feet, kg: 0, yaw, t, shaft: si }; wind.trestles.push(tr); mine.push(tr); }
+        return t !== undefined;
+      };
+      for (const t0 of sh.jib === false ? sh.bearings : sh.bearings.slice(1)) place(t0, [0, 1, -1, 2, -2, 3, -3, 4, -4]);
+      // and another wherever two of its bearings are further apart than the shaft may span (shaftSpan), as near the
+      // middle of the gap as is clear; where none is, the check finds the span too long
+      const gaps = () => { for (const hopeless = new Set(); ;) {
+        const at = [...(sh.jib === false ? [] : [sh.bearings[0]]), ...mine.map(q => q.t)].sort((a, b) => a - b);
+        const i = at.findIndex((a, k) => k + 1 < at.length && at[k + 1] - a > shaftSpan(sh.r) && !hopeless.has(a));
+        if (i < 0) break;
+        const a = at[i], b = at[i + 1], offs = [];
+        for (let o = 0; o <= (b - a) / 2 - 2.5; o += 0.5) offs.push(o, -o);
+        if (!place((a + b) / 2, offs)) hopeless.add(a);
+      } };
+      gaps();
+      // and where a wheel overhangs the last bearing at either end by more than OVERHANG, one beside the wheel (outside
+      // it if the shaft goes on past it); where that is too near the last for both to stand, the last moves out to it
+      for (const end of [0, sh.len]) {
+        const at = [...(sh.jib === false ? [] : [sh.bearings[0]]), ...mine.map(q => q.t)], last = end ? Math.max(...at) : Math.min(...at), s = end ? 1 : -1;
+        const out = sh.masses.map(([t]) => t).filter(t => s * (t - last) > 0), far = out.length ? (end ? Math.max(...out) : Math.min(...out)) : last;
+        if (Math.abs(far - last) <= OVERHANG || place(far, [1.0, 1.2, -1.0, -1.2, -1.5].map(o => o * s))) continue;
+        const q = mine.find(q => q.t === last);
+        if (!q) continue;
+        const drop = (q) => { mine.splice(mine.indexOf(q), 1); wind.trestles.splice(wind.trestles.indexOf(q), 1); };
+        drop(q);
+        const offs = [];
+        for (let o = 1.0; o <= Math.abs(far - last); o += 0.25) offs.push(-o * s);
+        if (!place(far, offs)) { mine.push(q); wind.trestles.push(q); }
+        else gaps();
       }
       // what the bevel wheels at a shaft's end push its pinion with, while winding, goes to the trestle nearest
       for (const e of sh.ends || []) { const tr = mine.reduce((b, q) => Math.abs(q.t - e.t) < Math.abs(b.t - e.t) ? q : b, mine[0]); if (tr) tr.push = (tr.push || [0, 0, 0]).map((v, i) => v + e.push[i]); }
@@ -296,7 +462,7 @@ export function buildStructure() {
         if (deg !== undefined) posts.push(post(sg, deg));
       }
       const push = W.mitrePush * sh.load;
-      wind.tips.push({ tip, posts, kg: share + 4e3, push: [-sh.d[2] * push, 0.36 * push, sh.d[0] * push], yaw });       // across the shaft, and a third as much pushing the wheels apart
+      wind.tips.push({ tip, posts, kg: 0, push: [-sh.d[2] * push, 0.36 * push, sh.d[0] * push], yaw, shaft: si, t: sh.bearings[0] });       // across the shaft, and a third as much pushing the wheels apart
     }
     // the lift: a stand under each bottom wheel's bearing, and a frame bracketed off the back wall for the top pair, which carry the cars and the chains
     for (const st of W.stands) if (st.foot) wind.trestles.push({ top: st.top, feet: st.feet, kg: st.kg, yaw: 0, y: st.top[1] + 0.45 }); else wind.head.push(st.p);
@@ -333,7 +499,7 @@ export function buildStructure() {
     {
       const ys = ARBOR.great.y - WIND.wheelR - 2.3, zp = WIND.z + 2.1, Lm = atG(-1, ys), Lp = atG(1, ys), mid = [ax, ys, zf];
       const tied = !fouls(Lm, Lp, 1.2, DEPTH) && !taken(Lm, Lp, 1.2, DEPTH, 'great');
-      if (tied) Tg.ties.push([Lm, Lp]);
+      if (tied) Tg.ties.push([Lm, Lp, 1.2, DEPTH]);
       wind.lever = { tied, tie: [Lm, Lp], arm: [mid, [ax, ys, zp]], post: [[ax, ys, zp], [ax, ARBOR.great.y - WIND.wheelR - WIND.wormR + 1.75, zp]] };
       for (const m of [wind.lever.tie, wind.lever.arm, wind.lever.post]) placed.push({ a: m[0], b: m[1], owner: 'great', box: memberBox(m[0], m[1], 0.4, 0.4) });
     }
@@ -357,17 +523,47 @@ export function buildStructure() {
       }
       if (detent) break;
     }
+    // The head frame's top is then braced as a truss: from the head beam's middle, under the pillow block, a raking
+    // strut down to each leg at the detent beam's end. The ring's push at the bearing and the pawl's at the beam go
+    // round that triangle (head, the two ends of the detent beam) as push and pull in its members, and the arbor's
+    // weight comes down the two struts as well as through the head beam. (As big as will pass, clear of the pawl.)
+    Tg.headX = [];
+    if (detent && Tg.head) {
+      const c = Tg.head[1], pb = pawlBox(detent.R, detent.h, detent.zb, detent.w);
+      const fits = (h, w) => [detent.p0, detent.p1].every(d => { const box = memberBox(c, d, h, w); return !fouls(c, d, h, w) && !swept(box) && !taken(c, d, h, w, 'great') && !overlaps(box, pb); });
+      const hw = HEAD_X.find(([h, w]) => fits(h, w));
+      if (hw) for (const d of [detent.p0, detent.p1]) { Tg.headX.push([c, d, ...hw]); placed.push({ a: c, b: d, owner: 'great', box: memberBox(c, d, ...hw) }); }
+    }
   }
   lap('detent');
-  // ---- 2. the walkways' rods to the roof, wherever a line straight up is clear
+  // ---- 2. the walkways' rods to the roof, wherever a line straight up is clear. (Raking them out to hold the deck
+  // sideways was tried: the crossings hang one beside another under the same purlins, at different heights, so a raked
+  // rod from one crosses the rods of the next, and where only one edge could rake, its pull had nothing to balance it.
+  // A crossing's sway is damped instead: see the dampers in declare.)
   hung = [];
   for (const e of EDGES) for (const x of ROOF.purlins) {
     if ([0, -0.7, 0.7].some(dx => [0, -0.25, 0.25].some(dz => ray([x + dx, e.y - 0.25, e.z + dz], [x + dx, ROOF.at(x) + 0.3, e.z + dz])))) continue;
     if (placed.some(m => gap([x, e.y, e.z], [x, ROOF.at(x), e.z], m.a, m.b) < (m.strut ? 0.5 : 1.8))) continue;
-    assembly(e.name).member([x, e.yc, e.z], [x, ROOF.at(x), e.z], SECTION.round(0.03), TENDON, 'tie', 'hanger').rest([x, ROOF.at(x), e.z], `purlin ${x}`);
-    hung.push({ x, e });
+    hung.push({ x, e, zt: e.z });
   }
   lap('hangers');
+  // ---- 2b. under each crossing's deck, room for a damper (DAMPER): as near the middle of its span, where its first
+  // sideways mode moves most, as the things under it allow, kept for the largest the damper may be
+  dampers = new Map();
+  {
+    const I3 = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    const room = (c, h) => !drawn.hit(obb(c, I3, h)) && !G.world.intersectionWithShape({ x: c[0], y: c[1], z: c[2] }, { x: 0, y: 0, z: 0, w: 1 }, new R.Cuboid(...h), undefined, undefined, G.ground)
+      && !taken([c[0] - h[0], c[1], c[2]], [c[0] + h[0], c[1], c[2]], 2 * h[1], 2 * h[2], 'damper') && !G.clear.some(zn => [0, 1, 2].every(i => zn.lo[i] < c[i] + h[i] && zn.hi[i] > c[i] - h[i]))
+      && !ENVELOPES.some(e => !e.floor && c[2] + h[2] + 0.15 > e.z0 && c[2] - h[2] - 0.15 < e.z1 && Math.hypot(Math.max(0, Math.abs(e.x - c[0]) - h[0]), Math.max(0, Math.abs(e.y - c[1]) - h[1])) < e.r + 0.3)
+      && ![-1, 1].some(sx => [-1, 1].some(sy => [-1, 1].some(sz => forbidden([c[0] + sx * h[0], c[1] + sy * h[1], c[2] + sz * h[2]]))));
+    for (const [name, b] of Object.entries(BRIDGES)) {
+      const edges = EDGES.filter(e => e.name.startsWith(`crossing ${name} `)); if (edges.length !== 2) continue;
+      const zc = (edges[0].z + edges[1].z) / 2, top = b.y - DAMPER.below, h = [DAMPER.long / 2 + 0.2, DAMPER.drop / 2, DAMPER.wide / 2];
+      const x = deckBeams().filter(x => Math.abs(x) < 40).sort((p, q) => Math.abs(p) - Math.abs(q)).find(x => room([x, top - h[1], zc], h));
+      if (x !== undefined) dampers.set(`deck ${name}`, { x, zc, top, width: Math.abs(edges[1].z - edges[0].z) });
+    }
+  }
+  lap('dampers');
   // ---- 3. the wind trusses. A wall 142 m long cannot span that far sideways against the wind by itself. Half way
   // up each storey a horizontal truss runs round the inside of the four walls: its outer chord is the wall's wind
   // girder, its inner chord runs parallel to the wall as far in as it can, with a post at every column and a
@@ -382,7 +578,7 @@ export function buildStructure() {
     const cx = TOWER.hx + TOWER.wall / 2, cz = TOWER.hz + TOWER.wall / 2, CH = WT_CHORD, WEB = WT_WEB;
     const roofBars = [...ROOF.purlins.map(x => [[x, ROOF.at(x), -TOWER.hz], [x, ROOF.at(x), TOWER.hz], 1.6]),
       ...TRUSS_Z.flatMap(z => [[[-TOWER.hx, ROOF.eaves, z], [TOWER.hx, ROOF.eaves, z], 2.1], [[-TOWER.hx, ROOF.eaves, z], [0, ROOF.ridge, z], 2.1], [[TOWER.hx, ROOF.eaves, z], [0, ROOF.ridge, z], 2.1]])];
-    const hangLines = hung.map(h => [[h.x, h.e.y, h.e.z], [h.x, ROOF.at(h.x) + 0.4, h.e.z]]);
+    const hangLines = hung.map(h => [[h.x, h.e.y, h.e.z], [h.x, ROOF.at(h.x) + 0.4, h.zt]]);
     const headroom = G.clear.map(zn => obb(zn.lo.map((v, i) => (v + zn.hi[i]) / 2), [[1, 0, 0], [0, 1, 0], [0, 0, 1]], zn.lo.map((v, i) => (zn.hi[i] - v) / 2)));
     // (a member that meets the wall is tested from 1.5 m in: its end is in the wall, which is its joint)
     const offWall = (a, b) => { const inA = Math.abs(Math.abs(a[0]) - cx) < 0.05 || Math.abs(Math.abs(a[2]) - cz) < 0.05; if (!inA) return [a, b]; const d = b.map((v, i) => v - a[i]), L = Math.hypot(...d); return [a.map((v, i) => v + d[i] / L * Math.min(1.5, L / 2)), b]; };
@@ -458,8 +654,8 @@ export function buildStructure() {
   draw();
   timing.draw = performance.now() - t1;
   const count = (k) => towers.reduce((n, t) => n + t[k].length, 0);
-  return { towers: towers.map(t => ({ name: t.name, height: +t.yh.toFixed(1), splay: [t.s['-1'], t.s['1']], unbraced: Math.round(Math.max(...t.legs.map(l => l[2]))), thick: [Math.min(...t.legs.map(l => l[3])), Math.max(...t.legs.map(l => l[3]))], ties: t.ties.length, braces: t.braces.length, struts: t.struts.length, stayed: t.stayed })),
-    members: count('legs') + count('ties') + count('braces') + count('struts'), links: links.length, hangers: hung.length, winding: wind && { yoke: wind.yoke.beams.length + wind.yoke.posts.length + wind.yoke.arms.length, lever: wind.lever.tied, steadiesAt: wind.steadies.map(m => [Math.round(m[2]), Math.round(m[1][1])]), at: wind.trestles.map(t => t.top.map(v => Math.round(v))), trestles: wind.trestles.length, posts: wind.tips.map(j => j.posts.length), steadies: wind.steadies.length }, detent: detent && { ...detent }, passes, timing, analysis: () => lastResult, service: () => ({ bearings: bearingMoves(lastResult), walls: wallMoves(lastResult) }), stone: () => stone && { faces: Object.fromEntries(Object.entries(stone.faces).map(([k, f]) => [k, Math.round(f.total / 1e3)])), crown: Object.fromEntries(Object.entries(stone.crown).filter(([, v]) => typeof v === 'number').map(([k, v]) => [k, Math.round(k === 'e' ? v * 100 : v / 1e3)])), own: Object.fromEntries(Object.entries(stone.own).map(([k, l]) => [k, Math.round(l.reduce((t, p) => t + p.kg, 0) / 1e3)])), rim: Math.round(stone.rim / 1e3) }, windTrusses: windTrusses.map(t => [t.wall, t.y, t.d, t.members.length]), seed: seedOut, sizes: Object.fromEntries([...sizes].map(([k, v]) => [k, +v.toFixed(2)])) };
+  return { towers: towers.map(t => ({ name: t.name, height: +t.yh.toFixed(1), splay: [t.s['-1'], t.s['1']], unbraced: Math.round(Math.max(...t.legs.map(l => l[2]))), thick: [Math.min(...t.legs.map(l => l[3])), Math.max(...t.legs.map(l => l[3]))], ties: t.ties.length, braces: t.braces.length, struts: t.struts.length, plan: t.plan.length / 3, stayed: t.stayed })),
+    members: count('legs') + count('ties') + count('braces') + count('struts'), links: links.length, hangers: hung.length, dampers: [...dampers].map(([k, d]) => [k, d.x, Math.round(sizes.get(`${k}|damper`) || 0), +(sizes.get(`${k}|damper hz`) || 0).toFixed(3)]), winding: wind && { yoke: wind.yoke.beams.length + wind.yoke.posts.length + wind.yoke.arms.length, lever: wind.lever.tied, steadiesAt: wind.steadies.map(m => [Math.round(m[2]), Math.round(m[1][1])]), at: wind.trestles.map(t => t.top.map(v => Math.round(v))), trestles: wind.trestles.length, posts: wind.tips.map(j => j.posts.length), steadies: wind.steadies.length, lines: WINDGEAR.shafts.map(sh => ({ A1: sh.A1.map(v => +v.toFixed(2)), d: sh.d.map(v => +v.toFixed(3)), len: +sh.len.toFixed(2), r: sh.r, bearings: sh.bearings.map(v => +v.toFixed(1)), trestles: wind.trestles.filter(t => t.shaft !== undefined && WINDGEAR.shafts[t.shaft] === sh).map(t => +t.t.toFixed(1)) })), uprights: WINDGEAR.uprights.map(u => +u.x.toFixed(2)), wz: WINDGEAR.wz }, detent: detent && { ...detent }, plan: (name) => { const T = towers.find(t => t.name === name), r = (m) => [m[0], m[1]].map(p => p.map(v => +v.toFixed(1))); return T && { planes: T.planes, yh: T.yh, a: T.a, legs: T.legs.map(m => [...r(m), m[3]]), ties: T.ties.map(r), braces: T.braces.map(r), struts: T.struts.map(r), plan: (T.plan || []).map(r), head: T.head && T.head.map(p => p.map(v => +v.toFixed(1))), headX: (T.headX || []).map(m => [...r(m), m[2], m[3]]) }; }, passes, timing, analysis: () => lastResult, service: () => ({ bearings: bearingMoves(lastResult), walls: wallMoves(lastResult) }), sensitivity: (frame, at, factors) => sensitivity(lastResult, frame, at, factors), stone: () => stone && { faces: Object.fromEntries(Object.entries(stone.faces).map(([k, f]) => [k, Math.round(f.total / 1e3)])), crown: Object.fromEntries(Object.entries(stone.crown).filter(([, v]) => typeof v === 'number').map(([k, v]) => [k, Math.round(k === 'e' ? v * 100 : v / 1e3)])), own: Object.fromEntries(Object.entries(stone.own).map(([k, l]) => [k, Math.round(l.reduce((t, p) => t + p.kg, 0) / 1e3)])), rim: Math.round(stone.rim / 1e3) }, windTrusses: windTrusses.map(t => [t.wall, t.y, t.d, t.members.length]), seed: seedOut, sizes: Object.fromEntries([...sizes].map(([k, v]) => [k, +v.toFixed(2)])), foundation: () => foundation };
 }
 
 // ---- the seed. The design loop only ever enlarges, so starting it from sizes that held before can make nothing
@@ -468,12 +664,12 @@ export function buildStructure() {
 // src/structure/design.json (window.__game.structure.seed() gives what to put there). Each is tied to the plan it
 // was made for: a fingerprint of every member's place, so that a seed for another plan is never used.
 const SEED_KEY = 'great-clock: structure sizes';
-const DESIGN_VERSION = 7;                             // (raise it when the loads or the rules change, so that no seed outlives them)
+const DESIGN_VERSION = 16;                             // (raise it when the loads or the rules change, so that no seed outlives them)
 function planSignature() {
   const r = (p) => p.map(v => Math.round(v * 100)).join(',');
-  const parts = [...towers.map(T => [T.name, ...T.legs.map(m => r(m[0]) + ':' + r(m[1]) + ':' + m[3]), ...T.ties.map(m => r(m[0])), ...T.braces.map(m => r(m[0]) + r(m[1])), ...T.struts.map(m => r(m[0]) + r(m[1]))].join(';')),
-    links.map(l => r(l.a) + r(l.b)).join(';'), hung.map(h => h.x + h.e.name).join(';'), windTrusses.map(t => t.wall + t.y + ':' + t.d + ':' + t.members.map(m => r(m.a) + r(m.b)).join('')).join(';'),
-    wind ? JSON.stringify([wind.trestles.map(t => t.top), wind.tips.map(t => t.posts), wind.steadies, wind.yoke, wind.lever]) : '', detent ? r(detent.p0) + r(detent.p1) + detent.h + detent.w + ':' + detent.R + (detent.strut ? r(detent.strut.p2) : '') : '',
+  const parts = [...towers.map(T => [T.name, ...T.legs.map(m => r(m[0]) + ':' + r(m[1]) + ':' + m[3]), ...T.ties.map(m => r(m[0]) + ':' + m[3]), ...T.braces.map(m => r(m[0]) + r(m[1])), ...T.struts.map(m => r(m[0]) + r(m[1])), ...(T.plan || []).map(m => r(m[0]) + r(m[1])), T.head ? 'head' + r(T.head[0]) + r(T.head[2]) : '', ...(T.headX || []).map(m => r(m[0]) + r(m[1]) + m[2] + m[3])].join(';')),
+    links.map(l => r(l.a) + r(l.b)).join(';'), hung.map(h => h.x + h.e.name + ':' + h.zt).join(';'), [...dampers].map(([k, d]) => k + d.x).join(';'), windTrusses.map(t => t.wall + t.y + ':' + t.d + ':' + t.members.map(m => r(m.a) + r(m.b)).join('')).join(';'),
+    wind ? JSON.stringify([wind.trestles.map(t => t.top), wind.tips.map(t => t.posts), wind.steadies, wind.yoke, wind.lever]) : '', detent ? r(detent.p0) + r(detent.p1) + detent.h + detent.w + ':' + detent.R : '',
     // and the loads that are not fixed in code: the stone as drawn, by face and on the crown (tonnes), and the brick
     stone ? Object.values(stone.faces).map(f => Math.round(f.total / 1e3)).join(',') + ':' + Math.round(stone.crown.total / 1e3) + ':' + Object.values(stone.own).map(l => Math.round(l.reduce((t, p) => t + p.kg, 0) / 1e3)).join(',') : '', Math.round(BRICK_PER_M2), String(DESIGN_VERSION)].join('|');
   let h1 = 5381, h2 = 52711;
@@ -503,6 +699,14 @@ function boxSized(owner, label, start, bmax, hmax = Infinity, wide = 0.7) {
   });
   return SECTION.box(h, b, t);
 }
+// A round bar of radius r: grows in area when overworked, up to rmax.
+function rodSized(owner, label, start, rmax) {
+  const k = `${owner}|${label}`, r = Math.min(size(k, start), rmax);
+  grow.set(k, (f) => { if (r < rmax - 1e-6) { sizes.set(k, Math.min(rmax, r * Math.sqrt(f))); return true; } return false; });
+  return SECTION.round(r);
+}
+// Several labels of one assembly that are one size (a brace that is a purlin): growing any grows that size.
+const alias = (owner, label, key) => { const g = grow.get(key); if (g) grow.set(`${owner}|${label}`, g); };
 // A piece of a tower's leg: m[3] thick across its frame (as much as its place between the wheels allows), and deep
 // in the plane of its frame as the analysis asks, up to four times its thickness or the 4 m its clearance was planned
 // for. A blade between two wheels that needs more than that is given thicker plates, not more depth: what holds a
@@ -537,14 +741,15 @@ function declare(out = null) {
     // link asks of the tower it is tied to is found, not assumed, and nothing is held still by fiat.
     const A = redeclare(T.name, 'braced tower of two A-frames, standing on the floor'), S = (label, start) => size(`${T.name}|${label}`, start);
     A.frame = 'towers';
-    const put = (m, section, h, w, label) => { A.member(m[0], m[1], section, ALLOY, 'beam', label); if (out) out.push({ a: m[0], b: m[1], h, w, label, owner: T.name }); };
+    const put = (m, section, h, w, label) => { A.member(m[0], m[1], section, ALLOY, 'beam', label); if (out) out.push({ a: m[0], b: m[1], h, w, label, owner: T.name, sec: section }); };
     // Legs are sized by where they are, frame by frame: the pieces that pass between two wheels are thin. A leg
     // has two sizes, its depth in the plane of its frame and its plate; see legSection().
     for (const m of T.legs) { const label = legLabel(T, m), sec = legSection(T, m); put(m, sec, sec.dims.h, m[3], label); }
-    for (const p of T.feet) A.rest(p, 'ground', 'fix');
-    for (const m of T.ties) { const s = boxSized(T.name, 'tie beam', 0.5, DEPTH, 1.2); put(m, s, s.dims.h, s.dims.b, 'tie beam'); }
+    for (const p of T.feet) A.rest(p, 'ground', [1, 1, 1, 1, 1, 0]);         // (pinned in the frame's own plane, built in across it)
+    for (const m of T.ties) { const s = boxSized(T.name, 'tie beam', 0.5, m[3], m[2], 1); put(m, s, s.dims.h, s.dims.b, 'tie beam'); }
     for (const m of T.braces) { const s = boxSized(T.name, 'brace', 0.4, DEPTH, 1.4); put(m, s, s.dims.h, s.dims.b, 'brace'); }
     for (const m of T.struts) { const s = boxSized(T.name, 'strut', 0.4, 1.1, 1.5); put(m, s, s.dims.h, s.dims.b, 'strut'); }
+    for (const m of T.plan) { const s = boxSized(T.name, 'plan brace', 0.4, PLAN_B, PLAN_B, 1); put(m, s, s.dims.h, s.dims.b, 'plan brace'); }
     if (T.arbor === 'great' && wind) {
       // The steadies that keep the upright shafts in line, the yoke that holds the worms' bearings (see the plan), and
       // the bracket the clutch lever is pinned to. What the shafts push them with is handed to them by the shafts' braces.
@@ -554,7 +759,7 @@ function declare(out = null) {
       for (const m of [...Yk.beams, ...Yk.posts]) put(m, yk, yk.dims.h, yk.dims.b, 'yoke');
       for (const m of Yk.arms) put(m, ya, ya.dims.h, ya.dims.b, 'yoke arm');
       // (the cap over the front bearing, and the stub under the head casting, are castings as stiff as the pillow block)
-      for (const m of Yk.caps) A.member(m[0], m[1], SECTION.box(2 * T.r + 1.2, DEPTH, 0.3), ALLOY, 'beam', 'yoke cap');
+      for (const m of Yk.caps) A.member(m[0], m[1], SECTION.box(2 * T.r + 1.2, DEPTH, 0.3), CAST, 'beam', 'yoke cap');
       for (const m of Yk.arms) A.mass(m[1], WINDGEAR.wormKg / 4 + 12e3, 'bearing housing');
       const L = wind.lever;
       put(L.arm, lb, lb.dims.h, lb.dims.b, 'lever bracket'); put(L.post, lb, lb.dims.h, lb.dims.b, 'lever bracket');
@@ -563,31 +768,59 @@ function declare(out = null) {
     for (const l of links) {
       // a distance piece bolted between a leg of this tower and a leg of the next: a member like any other
       // (pinned at both ends: it holds the two legs at their distance and passes nothing else between the towers)
-      if (l.A === T) { const s = boxSized(T.name, 'link', 0.7, 0.8, 0.8); A.member(l.a, l.b, s, ALLOY, 'link', 'link'); const f = out && faces(l); if (f) out.push({ a: f[0], b: f[1], h: s.dims.h, w: s.dims.b, label: 'link', owner: T.name, joins: [l.A.name, l.B.name] }); }
+      if (l.A === T) { const s = boxSized(T.name, 'link', 0.7, 0.8, 0.8); A.member(l.a, l.b, s, ALLOY, 'link', 'link'); const f = out && faces(l); if (f) out.push({ a: f[0], b: f[1], h: s.dims.h, w: s.dims.b, sec: s, label: 'link', owner: T.name, joins: [l.A.name, l.B.name] }); }
       if (l.B === T) A.node(l.b);                                    // the other tower's leg is joined there
     }
-    T.planes.forEach((z) => A.member([T.a.x, T.yh, z], [T.a.x, T.a.y, z], SECTION.box(2 * T.r + 1.2, DEPTH, 0.3), ALLOY, 'strut', 'pillow block'));
+    if (T.head) {
+      // the head beam the head frame's bearing stands on, and its raking struts (planned with the detent, 1c)
+      const hb = boxSized(T.name, 'head beam', 1.6, DEPTH, HEAD_H, 99);
+      put([T.head[0], T.head[1]], hb, hb.dims.h, hb.dims.b, 'head beam'); put([T.head[1], T.head[2]], hb, hb.dims.h, hb.dims.b, 'head beam');
+      for (const m of T.headX) { const s = boxSized(T.name, 'head brace', 0.8, m[3], m[2]); put(m, s, s.dims.h, s.dims.b, 'head brace'); }
+    }
+    // (a steel casting, graded by its 300 mm walls; in the head frame, from the head beam's middle)
+    T.planes.forEach((z) => A.member([T.a.x, z === T.headZ && T.head ? T.hy : T.yh, z], [T.a.x, T.a.y, z], SECTION.box(2 * T.r + 1.2, DEPTH, 0.3), CAST, 'strut', 'pillow block'));
     // the arbor, held endwise in both bearings, ties the two heads together (see clockwork.js); it is the arbor's
     // own steel, so its weight is not counted again here
     A.member([T.a.x, T.a.y, T.planes[0]], [T.a.x, T.a.y, T.planes[1]], SECTION.round(T.r), { ...ALLOY, rho: 0 }, 'link', 'arbor, as a tie');
   }
   if (wind) {
     const W = WINDGEAR, A = redeclare('winding gear', 'trestles and a jib under the line shafts, standing on the floor');
-    const put = (a, b, label, start) => { const s = label === 'jib' ? boxSized('winding gear', label, start, JIB_B, JIB_H, 1.2) : boxSized('winding gear', label, start, WG_B, WG_H); A.member(a, b, s, ALLOY, 'beam', label); if (out) out.push({ a, b, h: s.dims.h, w: s.dims.b, label, owner: 'winding gear' }); };
+    const put = (a, b, label, start) => { const s = label === 'jib' ? boxSized('winding gear', label, start, JIB_B, JIB_H, 1.2) : boxSized('winding gear', label, start, WG_B, WG_H); A.member(a, b, s, ALLOY, 'beam', label); if (out) out.push({ a, b, h: s.dims.h, w: s.dims.b, sec: s, label, owner: 'winding gear' }); };
+    // (a line shaft's plummer block on a trestle or a jib: from its top up to the shaft, which rests on it)
+    const block = (top, si) => { const y = W.shafts[si].A1[1]; A.member(top, [top[0], y, top[2]], SECTION.box(0.6, 0.6, 0.06), ALLOY, 'beam', 'plummer block'); };
     for (const t of wind.trestles) {
-      for (const f of t.feet) { put(f, t.top, 'trestle', 0.25); A.rest(f, 'ground', 'fix'); }
-      A.mass(t.top, t.kg, 'shaft');
+      for (const f of t.feet) { put(f, t.top, t.feet.length === 1 ? 'post' : 'trestle', t.feet.length === 1 ? 0.5 : 0.25); A.rest(f, 'ground', 'fix'); }
+      if (t.kg) A.mass(t.top, t.kg, 'the lift\'s wheel');
+      if (t.shaft !== undefined) block(t.top, t.shaft);
       if (t.push) A.force(t.top, t.push, 'the bevel wheels, while winding', 'winding');
     }
     for (const j of wind.tips) {
       for (const f of j.posts) { const head = [f[0], j.tip[1], f[2]]; put(f, head, 'post', 0.5); put(head, j.tip, 'jib', 0.35); A.rest(f, 'ground', 'fix'); }
-      A.mass(j.tip, j.kg, 'line shaft and mitre wheel').force(j.tip, j.push, 'the mitre wheels, while winding', 'winding');
+      block(j.tip, j.shaft); A.force(j.tip, j.push, 'the mitre wheels, while winding', 'winding');
     }
+    // The line shafts: round steel bars turning in their plummer blocks, each bent by its own weight and its wheels',
+    // which stand still while it turns (model.js checks that in rotating bending, at more than a million turns, where
+    // the endurance limit holds: a line shaft turns tens of millions of times in a century), and handing what it weighs
+    // to the trestles as the analysis finds it. Each bearing holds it every way but turning; one also stops it spinning
+    // on paper. How far a span sags between its bearings is checked in the structural check (SAG).
+    W.shafts.forEach((sh, si) => {
+      const L = redeclare(`line shaft ${si + 1}`, 'a line shaft of the winding gear, turning in plummer blocks'), on = (t) => [sh.A1[0] + sh.d[0] * t, sh.A1[1], sh.A1[2] + sh.d[2] * t];
+      const sup = [...wind.trestles.filter(t => t.shaft === si).map(t => t.t), ...wind.tips.filter(j => j.shaft === si).map(j => j.t)].sort((a, b) => a - b);
+      const knots = [...new Set([0, sh.len, ...sup, ...sh.masses.map(m => m[0])])].sort((a, b) => a - b), sec = SECTION.round(sh.r);
+      for (let i = 0; i + 1 < knots.length; i++) {
+        const n = Math.max(1, Math.ceil((knots[i + 1] - knots[i]) / 2)), dt = (knots[i + 1] - knots[i]) / n;
+        for (let k = 0; k < n; k++) L.member(on(knots[i] + k * dt), on(knots[i] + (k + 1) * dt), sec, MATERIAL.alloy, 'beam', 'line shaft', { turns: 1e8 });
+      }
+      for (const [t, kg] of sh.masses) L.mass(on(t), kg, 'a wheel');
+      const spin = [Math.abs(sh.d[0]) >= Math.abs(sh.d[2]) ? 1 : 0, 0, Math.abs(sh.d[0]) >= Math.abs(sh.d[2]) ? 0 : 1];
+      sup.forEach((t, i) => L.rest(on(t), 'winding gear', [1, 1, 1, ...(i === sup.length - 1 ? spin : [0, 0, 0])]));
+      L.shaft = { si, sup, A1: sh.A1, d: sh.d, len: sh.len, r: sh.r };
+    });
     if (wind.head.length) {
       // the lift's head frame: two girders out from the back wall, one either side of the shaft, each on a raking strut,
       // and a beam across them in front of and behind the wheels to carry the two top bearings
       const H = redeclare('lift head', 'frame carrying the lift\'s top wheels, bracketed off the back wall'), zw = -TOWER.hz + 0.35, y = wind.head[0][1], zf = Math.max(...wind.head.map(p => p[2]));
-      const bar = (a, b) => { const s = boxSized('lift head', 'girder', 0.4, 0.6, 1.0); H.member(a, b, s, ALLOY, 'beam', 'girder'); if (out) out.push({ a, b, h: s.dims.h, w: s.dims.b, label: 'lift head', owner: 'lift head' }); };
+      const bar = (a, b) => { const s = boxSized('lift head', 'girder', 0.4, 0.6, 1.0); H.member(a, b, s, ALLOY, 'beam', 'girder'); if (out) out.push({ a, b, h: s.dims.h, w: s.dims.b, sec: s, label: 'lift head', owner: 'lift head' }); };
       for (const x of [LIFT.x0 - 0.6, LIFT.x1 + 0.6]) {
         bar([x, y, zw], [x, y, zf]); bar([x, y - 4.5, zw], [x, y, zf]);
         H.rest([x, y, zw], 'shell back').rest([x, y - 4.5, zw], 'shell back');
@@ -603,8 +836,10 @@ function declare(out = null) {
       const B = redeclare(`upright shaft ${u.name}`, `steel shaft standing on a footstep${u.side > 0 ? ', held down' : ''}, the ${u.name}-hand worm on it`), P = (y) => [u.x, y, W.wz];
       B.member(P(0.6), P(W.top), SECTION.round(W.upR), ALLOY, 'beam', 'shaft').mass(P(W.crownY - 0.4), W.crownKg, 'crown wheel').mass(P(W.y), W.wormKg, 'worm').rest(P(0.6), 'ground', 'fix');
       B.force(P(W.y), u.push, 'the winding wheel\'s teeth, while winding', 'winding').force(P(W.crownY), u.crown, 'the bevel wheels, while winding', 'winding');
-      for (const m of wind.steadies.filter(m => m[2] === u.x)) B.brace(P(m[1][1]), 'x', 'tower great', m[1]).brace(P(m[1][1]), 'z', 'tower great', m[1]);
-      for (const m of wind.yoke.arms.filter(m => m[2] === u.x)) B.brace(P(m[1][1]), 'x', 'tower great', m[1]).brace(P(m[1][1]), 'z', 'tower great', m[1]);
+      // (each is the collar round the shaft, drawn, and the bearing housing in it, as stiff as the steady's own section)
+      const held = { section: SECTION.box(STEADY, STEADY, 0.04), drawn: true };
+      for (const m of wind.steadies.filter(m => m[2] === u.x)) B.brace(P(m[1][1]), 'x', 'tower great', m[1], held).brace(P(m[1][1]), 'z', 'tower great', m[1], held);
+      for (const m of wind.yoke.arms.filter(m => m[2] === u.x)) B.brace(P(m[1][1]), 'x', 'tower great', m[1], held).brace(P(m[1][1]), 'z', 'tower great', m[1], held);
     }
   }
   if (detent) {
@@ -620,7 +855,7 @@ function declare(out = null) {
     D.member(detent.p0, mid, s, ALLOY, 'beam', 'beam').member(mid, detent.p1, s, ALLOY, 'beam', 'beam')
       .member(mid, root, SECTION.bar(PAWL[0], detent.h), ALLOY, 'beam', 'pawl').member(root, top, SECTION.bar(PAWL[0], dz), ALLOY, 'beam', 'pawl').member(top, tip, SECTION.bar(PAWL[0], PAWL[0]), ALLOY, 'beam', 'pawl')
       .force(tip, [-MAINT.set * ROPE.W * WIND.barrelR / 7.7, 0, 0], 'the maintaining ring, held while the weight is wound', 'winding').rest(detent.p0, 'tower great', 'fix').rest(detent.p1, 'tower great', 'fix');
-    if (out) out.push({ a: detent.p0, b: detent.p1, h: s.dims.h, w: s.dims.b, label: 'detent', owner: 'tower great' });
+    if (out) out.push({ a: detent.p0, b: detent.p1, h: s.dims.h, w: s.dims.b, sec: s, label: 'detent', owner: 'tower great' });
   }
   // The crossings (tower.js) are each two lattice girders, one along either edge of the deck, hung from the
   // purlins. Alone, a girder 1.2 m deep and 130 m long has nothing to hold its top chord sideways. A cross beam
@@ -629,37 +864,86 @@ function declare(out = null) {
   for (const [name, b] of Object.entries(BRIDGES)) {
     const edges = EDGES.filter(e => e.name.startsWith(`crossing ${name} `));
     if (edges.length !== 2) continue;
-    const D = redeclare(`deck ${name}`, 'cross beams under a crossing\'s deck, joining its two girders'), lo = b.y - 0.2, s = SECTION.box(0.3, 0.12, 0.016), P = 8.75 / 4;
-    D.frame = `crossing ${name}`;
+    const D = redeclare(`deck ${name}`, 'cross beams under a crossing\'s deck, joining its two girders, and the plan bracing between them'), lo = b.y - 0.2, s = SECTION.box(0.3, 0.12, 0.016), P = 8.75 / 4;
+    D.frame = `crossing ${name}`; D.dynamic = true;
     for (const e of edges) { const g = getAssembly(e.name); if (g) g.frame = D.frame; }
-    const xs = [-65, 65];
-    for (let x = ROOF.purlins[0] + Math.ceil((-65 - ROOF.purlins[0]) / P) * P; x < 65; x += P) if (x > -65) xs.push(x);
+    const dn = `deck ${name}`, xs = deckBeams(), dm = dampers.get(dn), kg = dm ? size(`${dn}|damper`, 0) : 0;
     for (const x of xs) {
-      const a = [x, lo, edges[0].z], c = [x, lo, edges[1].z];
-      D.member(a, c, s, ALLOY, 'beam', 'cross beam');
+      const a = [x, lo, edges[0].z], c = [x, lo, edges[1].z], mid = [x, lo, (a[2] + c[2]) / 2];
+      if (kg > 0 && x === dm.x) D.member(a, mid, s, ALLOY, 'beam', 'cross beam').member(mid, c, s, ALLOY, 'beam', 'cross beam');       // (the damper hangs from its middle)
+      else D.member(a, c, s, ALLOY, 'beam', 'cross beam');
       if (out) out.push({ a: [x, b.y - 0.19, edges[0].z], b: [x, b.y - 0.19, edges[1].z], h: 0.3, w: 0.12, label: 'cross beam' });
     }
+    // plan bracing: a diagonal in every panel between the cross beams, under them, leaning alternately (a Warren truss
+    // in the plane of the deck, its chords the two bottom chords): it holds the deck against the wind and a crowd's sway
+    const pb = boxSized(`deck ${name}`, 'plan bracing', 0.12, 0.2, 0.2, 1), ys = xs;
+    for (let i = 0; i < ys.length - 1; i++) {
+      const [za, zb] = i % 2 ? [edges[1].z, edges[0].z] : [edges[0].z, edges[1].z];
+      D.member([ys[i], lo, za], [ys[i + 1], lo, zb], pb, ALLOY, 'beam', 'plan bracing');
+      if (out) out.push({ a: [ys[i], b.y - 0.4, za], b: [ys[i + 1], b.y - 0.4, zb], h: pb.dims.h, w: pb.dims.b, label: 'plan bracing' });
+    }
+    // plan chords: a plate under each bottom chord, as wide as the deck's sway asks (LAT_HZ), which stiffens the plan
+    // truss without making anything deeper
+    const kc = `deck ${name}|plan chord`, bw = Math.min(1.2, size(kc, 0.1)), pt = Math.max(0.03, bw / 12), pc = SECTION.bar(pt, bw);
+    grow.set(kc, (f) => { if (bw < 1.2 - 1e-6) { sizes.set(kc, Math.min(1.2, bw * f)); return true; } return false; });
+    for (const e of edges) for (let i = 0; i < ys.length - 1; i++) {
+      D.member([ys[i], lo, e.z], [ys[i + 1], lo, e.z], pc, ALLOY, 'beam', 'plan chord');
+      if (out) out.push({ a: [ys[i], b.y - 0.45 - pt / 2, e.z], b: [ys[i + 1], b.y - 0.45 - pt / 2, e.z], h: pt, w: bw, label: 'plan chord' });
+    }
+    // the damper (DAMPER), if the deck's sway needs one: its block's weight and its frame's where it hangs, from the
+    // middle of the cross beam over it (the block's swing is what damps the deck: see swayStable)
+    if (kg > 0) {
+      const g = damperShape(dm, kg, size(`${dn}|damper hz`, 1)), at = [dm.x, lo, dm.zc];
+      D.mass(at, kg, 'damper').mass(at, g.frameKg, 'damper frame');
+      if (out) {
+        out.push({ a: [dm.x, b.y - 0.34, dm.zc], b: [dm.x, dm.top, dm.zc], h: 0.2, w: 0.2, label: 'damper' });                        // the post
+        out.push({ a: [dm.x - g.yoke / 2, dm.top - 0.125, dm.zc], b: [dm.x + g.yoke / 2, dm.top - 0.125, dm.zc], h: 0.25, w: DAMPER.wide, label: 'damper' });     // the yoke
+        out.push({ a: [dm.x - g.bx / 2, g.yb, dm.zc], b: [dm.x + g.bx / 2, g.yb, dm.zc], h: g.by, w: g.bz, label: 'damper' });              // the block
+        for (const sz of [-1, 1]) out.push({ a: [dm.x, dm.top - 0.25, dm.zc + sz * g.arm], b: [dm.x, g.yb - 0.1, dm.zc + sz * g.arm], h: 0.12, w: 0.12, label: 'damper' });      // the arms the dashpots bear on
+        damperParts.push({ ...g, x: dm.x, zc: dm.zc, top: dm.top });
+      }
+    }
   }
+  // The walkways' hangers: steel bars (EN 1993-1-11 tension bars, forked at both ends), sized like everything else.
+  for (const name of new Set(hung.map(h => h.e.name))) { const A = getAssembly(name); if (A) { A.members = A.members.filter(m => m.label !== 'hanger'); A.rests = A.rests.filter(r => !String(r.on).startsWith('purlin ')); } }
+  for (const h of hung) {
+    const A = getAssembly(h.e.name), r = rodSized(h.e.name, 'hanger', 0.02, 0.08);
+    if (A) A.member([h.x, h.e.yc, h.e.z], [h.x, ROOF.at(h.x), h.zt], r, BAR, 'tie', 'hanger').rest([h.x, ROOF.at(h.x), h.zt], `purlin ${h.x}`);
+    if (out) out.push({ hanger: true, a: [h.x, h.e.y, h.e.z], b: [h.x, ROOF.at(h.x) + 0.4, h.zt], r: r.dims.h / 2 });
+  }
+  const purlins = new Map();
   for (const x of ROOF.purlins) {
     const A = redeclare(`purlin ${x}`, 'purlin'), s = boxSized(`purlin ${x}`, 'purlin', 0.35, 1.0, 1.5);
+    purlins.set(x, s);
     A.member([x, top(x), -hz], [x, top(x), hz], s, ALLOY, 'beam', 'purlin');
     for (const z of TRUSS_Z) A.rest([x, top(x), z], `roof truss ${z}`);
     A.rest([x, top(x), -hz], 'shell back').rest([x, top(x), hz], 'shell front');
-    if (out) out.push({ a: [x, top(x) + 0.45, -hz], b: [x, top(x) + 0.45, hz], h: s.dims.h, w: s.dims.b, label: 'purlin' });
+    if (out) out.push({ a: [x, top(x) + 0.45, -hz], b: [x, top(x) + 0.45, hz], h: s.dims.h, w: s.dims.b, sec: s, label: 'purlin' });
   }
   const xs = [-hx, ...ROOF.purlins, hx];
+  // under the purlins, at the level of the trusses' bottom chords, a tie from wall to wall at every post: what holds
+  // the bottom chords sideways (they would otherwise roll over when the wind lifts the roof and puts them in compression)
+  const ties = new Map();
+  for (const x of ROOF.purlins) {
+    const s = boxSized('roof ties', `tie ${x}`, 0.25, 0.6, 0.6, 1); ties.set(x, s);
+    if (out) out.push({ a: [x, y0, -hz], b: [x, y0, hz], h: s.dims.h, w: s.dims.b, sec: s, label: 'bottom tie' });
+  }
   for (const z of TRUSS_Z) {
     const name = `roof truss ${z}`, A = redeclare(name, 'spans the hall, wall to wall');
-    const bar = (a, b, label, start) => { const s = boxSized(name, label, start, 1.2, 2.0); A.member(a, b, s, ALLOY, 'beam', label); if (out) out.push({ a, b, h: s.dims.h, w: s.dims.b, label }); };
+    const bar = (a, b, label, start) => { const s = boxSized(name, label, start, 1.2, 2.0); A.member(a, b, s, ALLOY, 'beam', label); if (out) out.push({ a, b, h: s.dims.h, w: s.dims.b, sec: s, label }); };
     bar([-hx, y0, z], [hx, y0, z], 'bottom chord', 0.45);
     bar([-hx, y0, z], [0, ROOF.ridge, z], 'rafter', 0.45); bar([hx, y0, z], [0, ROOF.ridge, z], 'rafter', 0.45);
     for (let i = 1; i < xs.length - 1; i++) {
       bar([xs[i], y0, z], [xs[i], top(xs[i]), z], 'post', 0.25);
       const j = xs[i] < 0 ? i + 1 : i - 1;
       if (xs[i] !== 0) bar([xs[i], y0, z], [xs[j], top(xs[j]), z], 'diagonal', 0.25);
-      A.brace([xs[i], top(xs[i]), z], 'z', 'shell back', [xs[i], top(xs[i]), -hz]);       // the purlins keep it upright, and take what that asks to the back wall
+      // the purlins keep it upright, and take what that asks to the front and back walls they are pinned to: each is the
+      // brace, both ways, as stiff as it is over its length to each wall, and held part way by every truss it crosses
+      for (const sz of [-1, 1]) A.brace([xs[i], top(xs[i]), z], 'z', sz > 0 ? 'shell front' : 'shell back', [xs[i], top(xs[i]), sz * hz], { section: purlins.get(xs[i]), material: ALLOY, drawn: true, buckle: 16 });
+      for (const sz of [-1, 1]) A.brace([xs[i], y0, z], 'z', sz > 0 ? 'shell front' : 'shell back', [xs[i], y0, sz * hz], { section: ties.get(xs[i]), material: ALLOY, drawn: true, buckle: 16 });
     }
     A.rest([-hx, y0, z], 'shell left').rest([hx, y0, z], 'shell right', 'yz');           // one shoe fixed, the other free to slide as the truss stretches
+    for (const w of ['back', 'front']) grow.set(`${name}|brace to shell ${w}`, (f) => ROOF.purlins.flatMap(x => [grow.get(`purlin ${x}|purlin`)?.(f), grow.get(`roof ties|tie ${x}`)?.(f)]).some(Boolean));
   }
   declareShell(out);
 }
@@ -695,6 +979,9 @@ function declareDialFrame(seats, out) {
 }
 
 // ---- the shell: a steel frame with brick panels between
+// The sun on a wall: its steel stands a metre and more inside the brick, which the day's warmth does not reach through
+// (brick's daily penetration depth is about 0.12 m); what reaches it is the season's, a few degrees across a member.
+const SUN_DT = 5;
 const LINTEL = 9;                                     // height of the girder over the door
 const WALL_T = TOWER.wall + 0.3;                      // frame members are a little thicker than the brick, so they show on both faces
 const LEVELS = [30, 60, 90, 120, 150, 180, ROOF.eaves, TOWER.H], RING = DIAL.r + 1.2;
@@ -724,16 +1011,15 @@ function wallBox(key, start, cap, across, orient = 'h') {
   return SECTION.box(h, b, tw, tf);
 }
 
-// Wind. The peak velocity pressure at the top of the tower, WIND_Q, is taken over its whole height (which
-// overstates it lower down). On the face it blows on it pushes with 0.8 of that, on the face behind it pulls with
-// 0.6, and on the two faces it runs along it pulls with 0.9 (an average of zones A and B, EN 1991-1-4 7.2.2), with
-// an inside pressure of +0.2 or -0.3 on every wall from inside, whichever is worse (the door is the only opening).
-// The brick panels span up and down between girders, so a girder takes the wind on half the panel above it and half
-// the panel below. Wind on the roof is not applied (it would lighten it, and the crown is heavy).
-const WINDS = { 'wind +x': [1, 0, 0], 'wind -x': [-1, 0, 0], 'wind +z': [0, 0, 1], 'wind -z': [0, 0, -1] };
-const cpOf = (n, d) => { const c = n[0] * d[0] + n[2] * d[2]; return c < -0.5 ? 0.8 : c > 0.5 ? -0.6 : -0.9; };
-// what one square metre of a wall facing n is pushed with, by case (N/m^2, world axes)
-const windOn = (n) => Object.fromEntries([...Object.entries(WINDS).map(([k, d]) => { const cp = cpOf(n, d); return [k, n.map(v => -cp * WIND_Q * v)]; }), ['inside', n.map(v => 1e3 * v)]]);
+// Wind (structure/model.js). The peak velocity pressure at the walls' head, WIND_Q, is taken over the walls' whole height
+// (which overstates it lower down), and above them as it grows with height (windAt). On the face it blows on it pushes
+// with 0.8 of that, on the face behind it pulls with 0.6, and on the two faces it runs along it pulls with 0.9 (cpe), with
+// an inside pressure of +0.2 or -0.3 on every wall from inside, whichever is worse, or with the dial's glass broken the
+// pressure outside the dial. The brick panels span up and down between girders, so a girder takes the wind on half the
+// panel above it and half the panel below. The hall's own roof is under the attic and the crown, out of the wind; the
+// crown's flat is lifted by it (declareCrown).
+// what one square metre of a wall facing n is pushed with, by case (N/m^2, world axes), at a pressure q
+const windOn = (n, q = WIND_Q) => Object.fromEntries([...Object.entries(WINDS).map(([k, d]) => { const cp = cpe(n, d); return [k, n.map(v => -cp * q * v)]; }), ['inside', n.map(v => 1e3 * v)]]);
 
 // ---- the stone, weighed. Every piece of stone facade.js draws on a wall's face is found in DRAWN and weighed
 // where it is, storey by storey: a pier runs unbroken from the plinth to the cornice to look at, but it is built
@@ -752,8 +1038,9 @@ const volumeOf = (o) => (FRACTION[o.kind] ?? 0.5) * (['arch', 'pyr', 'wedge'].in
 // The brick of what stands outside the walls, as a fraction of solid: the stair towers' 1.5 m walls and the turret's
 // 1.2 m are cavity walls like the hall's (two leaves with cross-ribs between); the stack's are solid.
 const BRICK_SOLID = { 'stair tower left': 0.52, 'stair tower right': 0.52, 'escape turret left': 0.6, 'escape turret right': 0.6, stack: 1, yard: 1, flue: 1 };
-// the attic's floor: a slab ARCH.slab thick and ARCH.band wide all round, with the workshop and the keepers on it
-const SLAB_KG_M = ARCH.slab * ARCH.band * 2400 + 250 * ARCH.band;
+// the attic's floor: a slab ARCH.slab thick and ARCH.band wide all round (the workshop and the keepers on it are a live
+// load, LIVE, on the top girders)
+const SLAB_KG_M = ARCH.slab * ARCH.band * 2400;
 let stone = null;
 function weighStone() {
   const ox = TOWER.hx + TOWER.wall, oz = TOWER.hz + TOWER.wall, top = ARCH.attic + 1;
@@ -802,12 +1089,14 @@ function weighStone() {
   }
   // The crown. Its stone is weighed as drawn, and so is the attic's brick (above); the rest from facade.js's dimensions
   // and these allowances: the mansard is copper on boarding on rails between the rafters, 1.2 kN/m2 of its surface;
-  // the flat is zinc on boarding on joists, 1.0 kN/m2, with 1.5 kN/m2 more for snow and people; the lamp room's glass
-  // in its iron frame and its cap, 300 t, with the outer half of its floor and the people on its gallery (whose stone
-  // is drawn, and weighed with the drum's).
+  // the flat is zinc on boarding on joists, 1.0 kN/m2 (the people and the snow on it are a live load, LIVE); the lamp
+  // room's glass, iron, copper and gilding are weighed as drawn (weighLamp), with the outer half of its floor and its
+  // gallery's iron (whose stone is drawn, and weighed with the drum's). The people on them are a live load.
   const perim = 4 * (TOWER.hx + TOWER.hz + TOWER.wall), sl = Math.hypot(11, ARCH.flat - ARCH.attic), rf = LAMP.R - LAMP.drumWall;
-  crown.clad = 1.2e3; crown.flat = 2.5e3;
-  crown.lamp = 300e3 + 0.5 * (Math.PI * rf * rf - LAMP.well ** 2) * LAMP_FLOOR + Math.PI * ((LAMP.R + LAMP.gallery) ** 2 - LAMP.R ** 2) * 400;
+  crown.clad = 1.2e3; crown.flat = 1.0e3;
+  crown.lampDrawn = weighLamp();
+  crown.lampDeck = 0.5 * (Math.PI * rf * rf - LAMP.well ** 2) + Math.PI * ((LAMP.R + LAMP.gallery) ** 2 - LAMP.R ** 2);      // m2: the outer half of the floor, and the gallery
+  crown.lamp = crown.lampDrawn.kg + crown.lampDeck * LAMP_FLOOR;
   crown.roof = ((2 * (ox + ARCH.flatX + 0.8) + 2 * (oz + ARCH.flatZ + 0.8)) * sl * crown.clad + 4 * (ARCH.flatX + 0.8) * (ARCH.flatZ + 0.8) * crown.flat) / GRAVITY;
   crown.attic = Object.values(faces).reduce((t, f) => t + f.atticT, 0); crown.slab = SLAB_KG_M * perim;
   crown.total = crown.stone + crown.roof + crown.lamp + crown.attic + crown.slab;
@@ -816,6 +1105,38 @@ function weighStone() {
   const cz = TOWER.hz + TOWER.wall / 2;
   crown.e = (crown.slab * (cz - (oz - ARCH.band / 2)) - crown.attic * 0.5) / (crown.slab + crown.attic);
   stone = { faces, crown, rim, bands, own };
+}
+// The lamp room, weighed as drawn: everything facade.js draws of its drum (but the stone, weighed with the crown's),
+// its glass, mullions, bars and gallery, and its cap with the ribs, finial and vane. A piece more than 0.2 m through is
+// taken as hollow (a casting or a built-up section) with walls a tenth of its least dimension, at most 50 mm; the cap
+// is copper on boarding on steel purlins between its ribs, CAP_KG_M2 of its surface. What stands inside the drum (the
+// lamp, its floor's inner half, the stair) is on the lamp floor's own frame (tower.js).
+const DENSITY = { iron: 7850, steel: 7850, rail: 7850, gilt: 7850, plate: 7850, verdigris: 8900, copper: 8900, zinc: 7100, brass: 8500, bronze: 8800, handrail: 8500, glazing: 2500 };
+const CAP_KG_M2 = 55;
+function weighLamp() {
+  const L = LAMP, y0 = ARCH.flat, rf = L.R - L.drumWall, yc = y0 + L.drum + L.glass, by = {};
+  const inLamp = (c) => { const r = Math.hypot(c[0], c[2]); return r < L.R + L.gallery + 1.2 && c[1] >= y0 && (r >= rf - 0.7 || c[1] >= yc); };
+  const add = (mat, kg) => { by[mat] = (by[mat] || 0) + kg; };
+  const shell = (V, area, least) => least > 0.2 ? Math.min(V, area * Math.min(0.05, least / 10)) : V;
+  for (const o of DRAWN) {
+    const rho = DENSITY[o.mat]; if (!rho || !inLamp(o.c)) continue;
+    const h = o.half;
+    if (o.kind === 'box') { const [a, b, c] = h.map(v => 2 * v); add(o.mat, rho * shell(a * b * c, 2 * (a * b + b * c + c * a), Math.min(a, b, c))); }
+    else if (o.kind === 'cyl' || o.kind === 'rod') { const r = h[0], l = 2 * h[1]; add(o.mat, rho * shell(Math.PI * r * r * l, 2 * Math.PI * r * (l + r), Math.min(2 * r, l))); }
+    else if (o.kind === 'tube') { const l = 2 * h[0], r = h[1]; add(o.mat, rho * shell(Math.PI * r * r * l, 2 * Math.PI * r * l, 2 * r)); }
+    else add(o.mat, rho * volumeOf(o));
+  }
+  const c = new THREE.Vector3();
+  G.scene.traverse((m) => {
+    if (!m.isMesh || m.isInstancedMesh || !m.geometry?.parameters) return;
+    const g = m.geometry, p = g.parameters; if (!g.boundingSphere) g.computeBoundingSphere();
+    m.updateWorldMatrix(true, false); c.copy(g.boundingSphere.center).applyMatrix4(m.matrixWorld);
+    if (!inLamp([c.x, c.y, c.z])) return;
+    if (g.type === 'ConeGeometry' && p.radius > 3) add('the cap', CAP_KG_M2 * Math.PI * p.radius * Math.hypot(p.radius, p.height));
+    else if (g.type === 'TorusGeometry' && DENSITY[m.material?.name] !== undefined) add('bars', 7850 * shell(2 * Math.PI ** 2 * p.radius * p.tube ** 2, 4 * Math.PI ** 2 * p.radius * p.tube, 2 * p.tube));
+    else if (g.type === 'TorusGeometry') add('bars', 7850 * shell(2 * Math.PI ** 2 * p.radius * p.tube ** 2, 4 * Math.PI ** 2 * p.radius * p.tube, 2 * p.tube));
+  });
+  return { kg: Object.values(by).reduce((t, v) => t + v, 0), by };
 }
 // kg of stone standing on the piece of girder from a to b (along the wall) at storey level index k (0: the raft), and
 // on the top girder the attic's brick
@@ -833,6 +1154,9 @@ function stoneOn(name, k, a, b, first, last) {
 // block PAWL[0] wide, bolted on the beam's front face from its foot up to PAWL_TIP and forward to the front of the
 // ring's plane PAWL_Z (20.5 to 20.9, clockwork.js); PAWL[1], the ring's thickness)
 const DETENT_RS = [8.7, 9.0, 9.4, 9.8, 10.4, 11.0], PAWL_TIP = 7.75, PAWL = [2.0, 0.36], PAWL_Z = LAYER.C - 1.3;
+// The arbor that carries the maintaining ring, whose back frame stands the detent; that frame's head beam (as deep as
+// it may be, in the frame's own plane), and the sizes its raking struts are tried at, largest first (deep, thick).
+const MAINT_ARBOR = 'great', HEAD_H = 2.4, HEAD_X = [[1.6, DEPTH], [1.4, DEPTH], [1.2, DEPTH], [1.0, 0.8], [0.8, 0.6]];
 const pawlBox = (R, h, zb, w) => { const y0 = ARBOR.great.y - R - h / 2, y1 = ARBOR.great.y - PAWL_TIP, z0 = zb + w / 2, z1 = PAWL_Z + PAWL[1] / 2; return obb([ARBOR.great.x, (y0 + y1) / 2, (z0 + z1) / 2], [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [PAWL[0] / 2, (y1 - y0) / 2, (z1 - z0) / 2]); };
 // What goes round on an arbor sweeps a solid of revolution: everything drawn on it, every vertex, turned through a whole
 // turn. sweepOf(a)(box) says whether a box that stands still (an oriented box, obb()) is anywhere in it: whether, at
@@ -881,7 +1205,7 @@ function declareWindTrusses(out) {
         // (a corner is on two walls: the one it leaves at the shallower angle governs)
         const d = p1.map((v, i) => v - p0[i]), L = Math.hypot(...d), inn = Math.min(Math.abs(Math.abs(p0[0]) - cx) < 0.05 ? Math.abs(d[0]) / L : 1, Math.abs(Math.abs(p0[2]) - cz) < 0.05 ? Math.abs(d[2]) / L : 1);
         const a = on(p0) ? p0.map((v, i) => v + d[i] / L * Math.min(L / 2, (WALL_T / 2 + 0.1 + s.dims.b / 2 * Math.sqrt(Math.max(0, 1 - inn * inn))) / Math.max(0.2, inn))) : p0;
-        out.push({ a, b: p1, h: s.dims.h, w: s.dims.b, label: 'wind truss', owner: 'shell' });
+        out.push({ a, b: p1, h: s.dims.h, w: s.dims.b, sec: s, label: 'wind truss', owner: 'shell' });
       }
     }
   }
@@ -905,13 +1229,14 @@ function declareShell(out) {
     const heights = [...new Set([...LEVELS, ...WIND_LEVELS, ...windTrusses.filter(t => t.wall === W.name && t.y !== TOP_TRUSS).map(t => t.y)])].sort((a, b) => a - b);
     const trib = (y) => { const k = heights.indexOf(y), below = k ? heights[k - 1] : 0, above = heights[k + 1]; return (above === undefined ? y - below : above - below) / 2; };
     const A = redeclare(W.name, 'steel frame carrying the brick panels of one wall'); A.reach = 8; A.frame = 'shell';
+    A.warm = { n: W.n, dT: SUN_DT };                    // (its outer face warmer in the sun, or colder in a frost)
     const P = (c, y) => W.along === 'x' ? [c, y, W.at] : [W.at, y, c];
     const press = windOn(W.n), lines = (h) => Object.fromEntries(Object.entries(press).map(([k, v]) => [k, v.map(x => x * h)]));
     const colSec = wallBox(`${W.name}|column`, 1.0, 2.8, WALL_T, W.along === 'x' ? 'h' : 'b'), wc = W.along === 'x' ? colSec.dims.h : colSec.dims.b;
     const girSec = wallBox(`${W.name}|girder`, 1.2, 4.0, WALL_T);
     // drawn a hand's breadth inside the wall's centre line, so the frame shows indoors and the stone hides it outdoors
     const inward = (p) => W.along === 'x' ? [p[0], p[1], p[2] - Math.sign(W.at) * 0.2] : [p[0] - Math.sign(W.at) * 0.2, p[1], p[2]];
-    const draw = (a, b, h, w, label) => { if (out) out.push({ a: inward(a), b: inward(b), h, w, label }); };
+    const draw = (a, b, h, w, label, sec = null) => { if (out) out.push({ a: inward(a), b: inward(b), h, w, label, sec }); };
     const inDial = (c, y) => W.dial && Math.hypot(c - DIAL.x, y - DIAL.y) < RING, chord = (d) => Math.sqrt(Math.max(0, RING * RING - d * d));
     const ringPts = [];
     // (the top wind truss meets the columns just under the top girder, which is its outer chord)
@@ -924,7 +1249,7 @@ function declareShell(out) {
       const over = W.dial && Math.abs(c) < 5, foot = over ? LINTEL : 0;
       const pieces = cut ? [[foot, DIAL.y - cut], [DIAL.y + cut, H]] : [[foot, H]];
       if (over) { const s = wallBox(`${W.name}|lintel`, 1.4, 4.0, WALL_T); A.member(P(c - 10, LINTEL), P(c + 10, LINTEL), s, ALLOY, 'beam', 'lintel'); draw(P(c - 10, LINTEL), P(c + 10, LINTEL), s.dims.h, WALL_T, 'lintel'); }
-      for (const [y0, y1] of pieces) { A.member(P(c, y0), P(c, y1), colSec, ALLOY, 'beam', 'column'); draw(P(c, y0), P(c, y1), W.along === 'x' ? wc : WALL_T, W.along === 'x' ? WALL_T : wc, 'column'); }
+      for (const [y0, y1] of pieces) { A.member(P(c, y0), P(c, y1), colSec, ALLOY, 'beam', 'column'); draw(P(c, y0), P(c, y1), W.along === 'x' ? wc : WALL_T, W.along === 'x' ? WALL_T : wc, 'column', colSec); }
       if (cut) ringPts.push([c, DIAL.y - cut], [c, DIAL.y + cut]);
       if (!over) A.rest(P(c, 0), 'ground', 'fix');
     }
@@ -950,8 +1275,9 @@ function declareShell(out) {
         // (the top one takes the wind on the wall head, the cornice and the lower half of the attic's wall; the upper half
         // goes to the crown's ring at the attic's head)
         const pieces = mid === null ? [[a, b]] : [[a, mid], [mid, b]], ln = lines(trib(y) + (y === H ? ARCH.cornice - H + (ARCH.attic - ARCH.cornice) / 2 : 0));
+        if (y === H) ln[liveCase(P((a + b) / 2, y))] = [0, -LIVE.q * ARCH.band, 0];         // the workshop and the keepers on the attic's floor
         for (const [p0, p1] of pieces) A.member(P(p0, y), P(p1, y), sec, ALLOY, 'beam', storey ? 'girder' : 'wind girder', { lines: ln }, carry);
-        draw(P(a, y - hg / 2), P(b, y - hg / 2), hg, WALL_T, storey ? 'girder' : 'wind girder');
+        draw(P(a, y - hg / 2), P(b, y - hg / 2), hg, WALL_T, storey ? 'girder' : 'wind girder', sec);
       }
     });
     // The attic's floor reaches in from the wall head and its wall stands a little outside the girder's middle, so
@@ -974,7 +1300,7 @@ function declareShell(out) {
       if (W.dial && [0, 0.25, 0.5, 0.75, 1].some(t => Math.hypot(c0 + (c1 - c0) * t - DIAL.x, y0 + (y1 - y0) * t - DIAL.y) < RING + 1)) continue;
       if (W.dial && y0 === 0 && Math.abs((c0 + c1) / 2) < 6) continue;                            // the door
       const s = wallBox(`${W.name}|bracing`, 0.5, 2.0, WALL_T);
-      A.member(P(c0, y0), P(c1, y1), s, ALLOY, 'beam', 'bracing'); draw(P(c0, y0), P(c1, y1), s.dims.h, WALL_T + 0.04, 'bracing');
+      A.member(P(c0, y0), P(c1, y1), s, ALLOY, 'beam', 'bracing'); draw(P(c0, y0), P(c1, y1), s.dims.h, WALL_T + 0.04, 'bracing', s);
     }
     // the roof line on the front and back walls: a raking girder the purlins sit on
     if (W.ends) {
@@ -1008,7 +1334,7 @@ function declareShell(out) {
       declareDialFrame(ringPts.map(p => P(p[0], p[1])), out);
     }
   }
-  declareStairTowers(); declareEscape(); declareStack(); declareCrown(out);
+  declareStairTowers(out); declareEscape(); declareStack(); declareCrown(out);
   declareWindTrusses(out);
 }
 
@@ -1023,6 +1349,7 @@ function declareShell(out) {
 // with the brick between, and it stands alone, its wind taken down to its own footing. What is drawn of each is
 // weighed (weighStone), storey by storey, as it stands on each girder.
 const TANK_KG = 7.0 * 3.0 * 2.8 * 1000 * 0.95 + 9e3;          // a fire tank in the attic, full: its water and its iron
+const STAIR_KG = 150;                                          // steel flights and landings, kg per square metre walked on
 const OUT_FOOT = {};                                           // the footings outside the raft, by what stands on them
 // the brick and stone drawn for `name`, by storey (in `levels`) and, within a storey, by which of `sides` (tests of a
 // piece's centre) it is on: kg
@@ -1034,8 +1361,8 @@ function masonry(name, levels, sides = [() => true]) {
 const addLines = (a, b) => Object.fromEntries([...new Set([...Object.keys(a), ...Object.keys(b)])].map(k => [k, [0, 1, 2].map(d => (a[k]?.[d] || 0) + (b[k]?.[d] || 0))]));
 // wind on a strip of wall w wide facing n, and on a round or many-sided thing w across (force coefficient cf) shared by
 // k members: lines, N per metre, by case
-const faceWind = (n, w) => Object.fromEntries(Object.entries(windOn(n)).map(([k, v]) => [k, v.map(x => x * w)]));
-const roundWind = (w, cf, k) => Object.fromEntries(Object.entries(WINDS).map(([c, d]) => [c, d.map(v => v * cf * WIND_Q * w / k)]));
+const faceWind = (n, w, q = WIND_Q) => Object.fromEntries(Object.entries(windOn(n, q)).map(([k, v]) => [k, v.map(x => x * w)]));
+const roundWind = (w, cf, k, q = WIND_Q) => Object.fromEntries(Object.entries(WINDS).map(([c, d]) => [c, d.map(v => v * cf * q * w / k)]));
 // the wind on a cap, spire or lantern standing on the points `at` (round its foot): its push F, shared among them, and
 // its overturning, F times the height h of its middle over them, as a push down on the leeward ones and a pull up on
 // the windward
@@ -1049,7 +1376,7 @@ function capWind(A, at, F, h, label) {
 // the first carrying what bins says stands on it; returns where they are
 function columnsAndGirders(A, name, ring, lv, bins, segFace, faceLen, labelOf, colLines) {
   const col = (k) => boxSized(name, labelOf(k), 0.8, 1.3, 1.3, 1), gir = boxSized(name, 'girder', 1.0, 1.3, 3.0, 0.5);
-  ring.forEach(([x, z], r) => { for (let k = 0; k < lv.length - 1; k++) A.member([x, lv[k], z], [x, lv[k + 1], z], col(k), ALLOY, 'beam', labelOf(k), { lines: colLines[r] }); A.rest([x, 0, z], 'ground', 'fix'); });
+  ring.forEach(([x, z], r) => { for (let k = 0; k < lv.length - 1; k++) A.member([x, lv[k], z], [x, lv[k + 1], z], col(k), ALLOY, 'beam', labelOf(k), { lines: colLines(r, k) }); A.rest([x, 0, z], 'ground', 'fix'); });
   for (let k = 1; k < lv.length; k++) ring.forEach(([x, z], r) => {
     const [x1, z1] = ring[(r + 1) % ring.length], f = segFace(r);
     A.member([x, lv[k], z], [x1, lv[k], z1], gir, ALLOY, 'beam', 'girder', null, bins[k][f] * GRAVITY / faceLen[f]);
@@ -1059,7 +1386,7 @@ function columnsAndGirders(A, name, ring, lv, bins, segFace, faceLen, labelOf, c
   for (const [x, z] of ring) A.mass([x, 0, z], foot, 'brick and stone of the lowest storey');
 }
 
-function declareStairTowers() {
+function declareStairTowers(out = null) {
   const S = STAIR_TOWER, lv = [...S.levels, S.stage, S.top], cx = TOWER.hx + TOWER.wall / 2, cz = TOWER.hz + TOWER.wall / 2;
   const mx = (S.x0 + S.x1) / 2, mz = (S.z0 + S.z1) / 2, X = [S.x0 + S.wall / 2, mx, S.x1 - S.wall / 2], Z = [S.z0 + S.wall / 2, mz, S.z1 - S.wall / 2];
   for (const sx of [-1, 1]) {
@@ -1073,27 +1400,59 @@ function declareStairTowers() {
     const bins = masonry(name, lv, sides);
     // the wind on its walls, on the columns either side of each piece of wall (the back's inner half is against the front wall)
     const seg = (r) => Math.hypot(ring[(r + 1) % 8][0] - ring[r][0], ring[(r + 1) % 8][1] - ring[r][1]);
-    const colLines = ring.map((_, r) => [r, (r + 7) % 8].reduce((L, k) => k === 0 ? L : addLines(L, faceWind(normals[Math.floor(k / 2)], seg(k) / 2)), {}));
+    const colLines = (r, s) => [r, (r + 7) % 8].reduce((L, k) => k === 0 ? L : addLines(L, faceWind(normals[Math.floor(k / 2)], seg(k) / 2, windAt(lv[s + 1]))), {});
     columnsAndGirders(A, name, ring, lv, bins, (r) => Math.floor(r / 2), faceLen, (k) => lv[k] < 120 ? 'column, foot' : lv[k] < ARCH.cornice ? 'column, middle' : 'column, head', colLines);
     // (its stair is declared on its own, resting on this frame, and so are the hoist and the tank in the stage under the
-    // spire: tower.js, hoist.js) the floors through the walls at the doors; the lookout's floor (and the people on it), its
+    // spire: tower.js, hoist.js) the floors through the walls at the doors; the lookout's floor (and the people on it, LIVE), its
     // stone ceiling, which is the floor of the stage over it; the stone roof of that stage, and the spire on it, copper on
     // a steel frame
+    A.slender = { b: S.x1 - S.x0, square: true, top: S.top, tied: ARCH.attic, damper: SPIRE.most };
     const slab = (S.x1 - S.x0 - 2 * S.wall) * (S.z1 - S.z0 - 2 * S.wall) * 0.35 * 2400;
-    for (const y of S.levels.slice(1)) for (const [x, z] of ring) A.mass([x, y, z], (y === S.levels[S.levels.length - 1] ? 120e3 : 10e3) / 8, y === S.levels[S.levels.length - 1] ? 'the lookout\'s floor' : 'the floor through the wall at the door');
+    const lookout = (S.x1 - S.x0 - 2 * S.wall) * (S.z1 - S.z0 - 2 * S.wall), top = S.levels[S.levels.length - 1];
+    for (const y of S.levels.slice(1)) for (const [x, z] of ring) A.mass([x, y, z], (y === top ? lookout * STAIR_KG : 10e3) / 8, y === top ? 'the lookout\'s floor' : 'the floor through the wall at the door');
+    for (const [x, z] of ring) A.force([x, top, z], [0, -lookout * LIVE.q / 8, 0], 'people on the lookout', liveCase([sx * mx, top, mz]));
     for (const [x, z] of ring) A.mass([x, S.stage, z], slab / 8, 'the lookout\'s ceiling');
     for (const [x, z] of ring) A.mass([x, S.top, z], (slab + 300e3) / 8, 'roof and spire');
     const r0 = 10.2, h = S.spire - S.top - 4;
-    capWind(A, ring.map(([x, z]) => [x, S.top, z]), 0.8 * WIND_Q * r0 * h, 4 + h / 3, 'wind on the spire');
+    capWind(A, ring.map(([x, z]) => [x, S.top, z]), 0.8 * windAt(S.spire) * r0 * h, 4 + h / 3, 'wind on the spire');
     // tied to the front wall's column beside it and to the corner column, at every storey up to the attic's floor, and to
     // the crown's posts at the attic's head
     for (const y of lv.slice(1)) {
       if (y > ARCH.attic) continue;
-      const on = (wall) => (y > TOWER.H + 2.5 ? 'crown' : wall);
-      A.brace([ring[0][0], y, ring[0][1]], 'x', on('shell front'), [sx * 60, y, cz]).brace([ring[0][0], y, ring[0][1]], 'z', on('shell front'), [sx * 60, y, cz]);
-      A.brace([ring[1][0], y, ring[1][1]], 'z', on(sx < 0 ? 'shell left' : 'shell right'), [sx * cx, y, cz]);
+      const on = (wall) => (y > TOWER.H + 2.5 ? 'crown' : wall), tie = (wall) => ({ section: boxSized(name, `brace to ${on(wall)}`, 0.5, 1.0, 1.0, 1), material: ALLOY });     // (each a box, sized like a member)
+      A.brace([ring[0][0], y, ring[0][1]], 'x', on('shell front'), [sx * 60, y, cz], tie('shell front')).brace([ring[0][0], y, ring[0][1]], 'z', on('shell front'), [sx * 60, y, cz], tie('shell front'));
+      A.brace([ring[1][0], y, ring[1][1]], 'z', on(sx < 0 ? 'shell left' : 'shell right'), [sx * cx, y, cz], tie(sx < 0 ? 'shell left' : 'shell right'));
     }
     OUT_FOOT[name] = { area: (S.x1 - S.x0 + 2) * (S.z1 - S.z0 + 1), n: ring.length, box: [sx * mx, mz + 0.5, S.x1 - S.x0 + 2, S.z1 - S.z0 + 1] };
+    // its damper (SPIRE), if its sway needs one (see vortex): a frame of its own, standing on the tower's head and
+    // analysed with it, and the block's weight where its rods hang from the frame's cross. (The block's swing is what damps
+    // the tower; the tower's mode is found without it, as Den Hartog's tuning has it.)
+    const dn = `damper, ${name}`, kg = size(`${name}|damper`, 0);
+    if (!(kg > 0)) { forget(dn); continue; }
+    const D = redeclare(dn, 'a block of steel hung as a pendulum in the base of the spire, and the frame it hangs from, on the stone roof of the stage');
+    D.frame = name;
+    const gir = boxSized(dn, 'girder', 0.6, 0.6, 1.2), post = boxSized(dn, 'post', 0.4, 0.5, 0.6, 1), head = boxSized(dn, 'head', 0.4, 0.5, 0.8), rail = boxSized(dn, 'rail', 0.25, 0.3, 0.3, 1);
+    const g = spireDamper(name, kg, size(`${name}|damper hz`, 0.27), gir.dims.h, head.dims.h), P = SPIRE.P, dx0 = g.cx, dz0 = g.cz;
+    const put = (a, b, sec, label) => { D.member(a, b, sec, ALLOY, 'beam', label); if (out) out.push({ a, b, h: sec.dims.h, w: sec.dims.b, sec, label: 'damper', owner: dn }); };
+    const xs = [sx * X[0], sx * X[2]].sort((p, q) => p - q);
+    for (const dz of [-P, P]) {
+      const pts = [[xs[0], g.gy, dz0 + dz], [dx0 - P, g.gy, dz0 + dz], [dx0 + P, g.gy, dz0 + dz], [xs[1], g.gy, dz0 + dz]];
+      for (let k = 0; k < 3; k++) put(pts[k], pts[k + 1], gir, 'girder');
+      for (const p of [pts[0], pts[3]]) D.rest(p, name, 'fix');                                       // (on the side walls' head girders)
+    }
+    const corner = [[-P, -P], [P, -P], [P, P], [-P, P]].map(([dx, dz]) => [dx0 + dx, dz0 + dz]);
+    for (const [x, z] of corner) put([x, g.gy, z], [x, g.hy, z], post, 'post');
+    corner.forEach(([x, z], k) => { const [x1, z1] = corner[(k + 1) % 4]; put([x, g.hy, z], [x1, g.hy, z1], head, 'head'); put([x, g.yb, z], [x1, g.yb, z1], rail, 'rail'); });
+    for (const [ux, uz] of [[1, 0], [0, 1]]) {                                                     // the cross, and the rods' four places on it
+      const at = (t) => [dx0 + ux * t, g.hy, dz0 + uz * t], ts = [-P, -g.a, 0, g.a, P];
+      for (let k = 0; k < 4; k++) put(at(ts[k]), at(ts[k + 1]), head, 'cross');
+      for (const t of [-g.a, g.a]) D.mass(at(t), kg / 4 + SPIRE.rho * Math.PI * SPIRE.rod ** 2 * g.Lp, 'the block, on its rod');
+    }
+    for (const [x, z] of [[dx0 - P, dz0], [dx0 + P, dz0], [dx0, dz0 - P], [dx0, dz0 + P]]) D.mass([x, g.yb, z], 250, 'a dashpot');
+    if (out) {
+      out.push({ a: [dx0 - g.side / 2, g.yb, dz0], b: [dx0 + g.side / 2, g.yb, dz0], h: g.high, w: g.side, label: 'damper', owner: dn });           // the block
+      damperParts.push({ tower: true, ...g });
+    }
   }
 }
 
@@ -1101,13 +1460,13 @@ function declareEscape() {
   const E = ESCAPE, cz = TOWER.hz + TOWER.wall / 2, r = E.r - E.wall / 2, lv = [0, 30, 60, 90, 120, 150, 180, 210, 242, E.top];
   for (const sx of [-1, 1]) {
     const name = `escape turret ${sx < 0 ? 'left' : 'right'}`, ex = sx * E.x;
-    const A = redeclare(name, 'steel frame in the wall of an escape stair\'s turret, tied to the back wall at every storey'); A.reach = 4;
+    const A = redeclare(name, 'steel frame in the wall of an escape stair\'s turret, tied to the back wall at every storey'); A.reach = 4; A.slender = { b: 2 * E.r, top: E.top, tied: Math.min(E.top, ARCH.attic) };
     const ring = Array.from({ length: 8 }, (_, k) => { const a = Math.PI / 8 + k * Math.PI / 4; return [ex + r * Math.cos(a), E.z + r * Math.sin(a)]; });
     const bins = masonry(name, lv), around = 8 * 2 * r * Math.sin(Math.PI / 8);
-    columnsAndGirders(A, name, ring, lv, bins, () => 0, [around], (k) => lv[k] < 150 ? 'column, foot' : 'column, head', ring.map(() => roundWind(2 * E.r, 0.9, 8)));
+    columnsAndGirders(A, name, ring, lv, bins, () => 0, [around], (k) => lv[k] < 150 ? 'column, foot' : 'column, head', (r, k) => roundWind(2 * E.r, 0.9, 8, windAt(lv[k + 1])));
     for (const y of E.levels.slice(1)) for (const [x, z] of ring) A.mass([x, y, z], 6e3 / 8, 'the floor through the wall at the door');        // (its stair stands on its own columns and bears on this frame: tower.js)
     for (const [x, z] of ring) A.mass([x, E.top, z], 130e3 / 8, 'cap');
-    capWind(A, ring.map(([x, z]) => [x, E.top, z]), 0.6 * WIND_Q * (E.r + 1) * (E.cap - E.top), (E.cap - E.top) / 3, 'wind on the cap');
+    capWind(A, ring.map(([x, z]) => [x, E.top, z]), 0.6 * windAt(E.cap) * (E.r + 1) * (E.cap - E.top), (E.cap - E.top) / 3, 'wind on the cap');
     // the two columns next to the wall, tied to it (and at the head to the crown's ring)
     for (const y of lv.slice(1)) { const on = y > TOWER.H + 2.5 ? 'crown' : 'shell back'; for (const k of [1, 2]) A.brace([ring[k][0], y, ring[k][1]], 'z', on, [ring[k][0], y, -cz]); A.brace([ring[1][0], y, ring[1][1]], 'x', on, [ring[1][0], y, -cz]); }
     OUT_FOOT[name] = { area: Math.PI * (E.r + 1) ** 2, n: 8, c: [ex, E.z], r: E.r + 1 };
@@ -1120,7 +1479,7 @@ function declareEscape() {
 // wind on it is taken down the frame to its footing: nothing ties it to anything.
 function declareStack() {
   const S = STACK, name = 'stack', n = STACK_RINGS, H = S.top - S.pedH, lv = [0, ...Array.from({ length: n + 1 }, (_, k) => S.pedH + H * k / n)];
-  const A = redeclare(name, 'steel frame in the brick of the stack behind the building, free-standing on its own footing'); A.reach = 4;
+  const A = redeclare(name, 'steel frame in the brick of the stack behind the building, free-standing on its own footing'); A.reach = 4; A.slender = { b: 2 * stackR(S.top - 0.5), top: S.top, tied: 0 };
   // its columns stand in the middle of the brick, from the pedestal's foot (where they are in its walls) to the head
   const rc = (y) => (y <= S.pedH ? stackR(S.pedH) - stackWall(S.pedH + 0.1) / 2 : stackR(y) - stackWall(Math.min(S.top - 0.1, y)) / 2) / Math.cos(Math.PI / 8);
   const at = (k, y) => { const a = Math.PI / 8 + k * Math.PI / 4; return [S.x + rc(y) * Math.cos(a), y, S.z + rc(y) * Math.sin(a)]; };
@@ -1129,7 +1488,7 @@ function declareStack() {
   for (let s = 1; s < lv.length - 1; s++) { let kg = 0; for (let y = lv[s] + 0.25; y < lv[s + 1]; y += 0.5) { const r = stackR(y), t = stackWall(y); kg += Math.PI * (r * r - (r - t) ** 2) * 0.5 * MATERIAL.brick.rho; } bins[s][0] += kg; }
   const col = (s) => boxSized(name, s < 4 ? 'column, foot' : 'column, head', 0.8, 1.2, 1.2, 1), ringS = boxSized(name, 'ring', 0.6, 0.8, 1.6, 1);
   for (let s = 0; s < lv.length - 1; s++) {
-    const y0 = lv[s], y1 = lv[s + 1], width = y1 <= S.pedH ? 2 * S.ped * 1.1 : 2 * stackR((y0 + y1) / 2), lines = roundWind(width, y1 <= S.pedH ? 1.6 : 0.8, 8), per = 8 * 2 * rc(y1) * Math.sin(Math.PI / 8);
+    const y0 = lv[s], y1 = lv[s + 1], width = y1 <= S.pedH ? 2 * S.ped * 1.1 : 2 * stackR((y0 + y1) / 2), lines = roundWind(width, y1 <= S.pedH ? 1.6 : 0.8, 8, windAt(y1)), per = 8 * 2 * rc(y1) * Math.sin(Math.PI / 8);
     for (let k = 0; k < 8; k++) {
       A.member(at(k, y0), at(k, y1), col(s), ALLOY, 'beam', s < 4 ? 'column, foot' : 'column, head', { lines });
       A.member(at(k, y1), at((k + 1) % 8, y1), ringS, ALLOY, 'beam', 'ring', null, (bins[s + 1]?.[0] || 0) * GRAVITY / per);
@@ -1153,7 +1512,7 @@ function declareCrown(out) {
   const xs = [], zs = [];
   for (let v = -60; v <= 60; v += 10) xs.push(v);
   for (let v = -30; v <= 30; v += 10) zs.push(v);
-  const mem = (a, b, sec, label, opts = null, carries = 0) => { A.member(a, b, sec, ALLOY, 'beam', label, opts, carries); if (out) out.push({ a, b, h: sec.dims.h, w: sec.dims.b, label: 'crown', owner: 'crown' }); };
+  const mem = (a, b, sec, label, opts = null, carries = 0) => { A.member(a, b, sec, ALLOY, 'beam', label, opts, carries); if (out) out.push({ a, b, h: sec.dims.h, w: sec.dims.b, sec: sec, label: 'crown', owner: 'crown' }); };
   const rafter = boxSized('crown', 'rafter', 0.8, 0.9, 1.3, 1), hip = boxSized('crown', 'hip', 0.8, 0.9, 1.3, 1), tie = boxSized('crown', 'tie', 0.5, 0.7, 1.0, 1);
   const vert = boxSized('crown', 'vertical', 0.5, 0.8, 1.0, 1), diag = boxSized('crown', 'diagonal', 0.5, 0.8, 1.0, 1), chord = boxSized('crown', 'chord', 0.6, 0.9, 1.3, 1);
   const purlin = boxSized('crown', 'purlin', 0.6, 0.7, 1.3, 0.6), binder = boxSized('crown', 'binder', 0.4, 0.6, 0.8, 1);
@@ -1168,7 +1527,7 @@ function declareCrown(out) {
     if (out) out.push({ a: [x, y0, z], b: [x, ye, z], h: side ? 0.9 : s.dims.h, w: side ? s.dims.b : 0.9, label: 'crown', owner: 'crown' });
     A.rest([x, y0, z], wallOf([x, z]), 'fix');
     const q = heads[(i + 1) % heads.length];
-    mem([x, ye, z], [q[0], ye, q[1]], ringS, 'ring', { lines: faceWind(normalOf([x, z], q), (ARCH.attic - ARCH.cornice) / 2) });
+    mem([x, ye, z], [q[0], ye, q[1]], ringS, 'ring', { lines: faceWind(normalOf([x, z], q), (ARCH.attic - ARCH.cornice) / 2, windAt(ARCH.attic)) });
   });
   const trib = (v, edge) => (Math.abs(Math.abs(v) - edge) < 0.01 ? 5 + 2.75 : 10);
   // a truss across on every column line of the front and back: tie, chord half way up, top chord; verticals on the
@@ -1184,23 +1543,28 @@ function declareCrown(out) {
       mem([x, ye, o], [x, ym, n], diag, 'diagonal'); mem([x, ym, o], [x, yt, n], diag, 'diagonal');
     }
     for (const s of [-1, 1]) {
-      mem([x, ye, s * cz], [x, yt, s * fz], rafter, 'rafter', { lines: faceWind([0, 0, s], trib(x, fx)) }, C.clad * trib(x, fx));
+      mem([x, ye, s * cz], [x, yt, s * fz], rafter, 'rafter', { lines: faceWind([0, 0, s], trib(x, fx), windAt(ARCH.flat)) }, C.clad * trib(x, fx));
       mem([x, ye, s * cz], [x, ym, s * fz], diag, 'diagonal');
     }
   }
   // down the ends: a rafter on every column line of the side walls, with a tie at its foot and a strut half way up to
   // the end truss; the hips
   for (const s of [-1, 1]) for (const z of zs) {
-    mem([s * cx, ye, z], [s * fx, yt, z], rafter, 'rafter', { lines: faceWind([s, 0, 0], trib(z, fz)) }, C.clad * trib(z, fz));
+    mem([s * cx, ye, z], [s * fx, yt, z], rafter, 'rafter', { lines: faceWind([s, 0, 0], trib(z, fz), windAt(ARCH.flat)) }, C.clad * trib(z, fz));
     mem([s * cx, ye, z], [s * fx, ye, z], tie, 'tie'); mem([s * mx, ym, z], [s * fx, ym, z], tie, 'tie');
   }
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) mem([sx * cx, ye, sz * cz], [sx * fx, yt, sz * fz], hip, 'hip', null, C.clad * 5.5);
   // the girder round the slopes half way up, through the rafters' and the hips' middles
   const mid = [...[-mx, ...xs, mx].map(x => [x, -mz]), ...zs.map(z => [mx, z]), ...[mx, ...[...xs].reverse(), -mx].map(x => [x, mz]), ...[...zs].reverse().map(z => [-mx, z])];
   mid.forEach(([x, z], i) => { const q = mid[(i + 1) % mid.length]; mem([x, ym, z], [q[0], ym, q[1]], binder, 'girder round the slopes'); });
-  // the purlins under the flat, and the binders along the feet of the trusses
+  // the purlins under the flat, and the binders along the feet of the trusses. On the flat: the people and the snow
+  // (LIVE, which is more than snow), and the wind lifting it: cpe -1.2 (EN 1991-1-4 7.2.3, zone G, taken all over) and
+  // +0.2 inside, at the flat's height
+  const lift = 1.4 * windAt(ARCH.flat);
   for (const z of zs) for (let i = 0; i < xs.length - 1; i++) {
-    mem([xs[i], yt, z], [xs[i + 1], yt, z], purlin, 'purlin', null, C.flat * (Math.abs(Math.abs(z) - fz) < 0.01 ? 5.8 : 10));
+    const tr = Math.abs(Math.abs(z) - fz) < 0.01 ? 5.8 : 10, on = { [liveCase([(xs[i] + xs[i + 1]) / 2, yt, z])]: [0, -LIVE.q * tr, 0] };
+    for (const k of Object.keys(WINDS)) on[k] = [0, lift * tr, 0];
+    mem([xs[i], yt, z], [xs[i + 1], yt, z], purlin, 'purlin', { lines: on }, C.flat * tr);
     mem([xs[i], ye, z], [xs[i + 1], ye, z], binder, 'binder');
   }
   // the stone over the attic's cornice, where it stands: the lamp room's on the eight joints under its drum, the rest
@@ -1213,9 +1577,9 @@ function declareCrown(out) {
     let best = 0, bd = Infinity; heads.forEach(([hx, hz], i) => { const d = Math.hypot(hx - x, hz - z); if (d < bd) { bd = d; best = i; } }); ringKg[best] += kg;
   }
   heads.forEach(([x, z], i) => { if (ringKg[i]) A.mass([x, ye, z], ringKg[i], 'stone over the attic'); });
-  for (const p of lamp) A.mass(p, onLamp / lamp.length, 'the lamp room');
+  for (const p of lamp) A.mass(p, onLamp / lamp.length, 'the lamp room').force(p, [0, -C.lampDeck * LIVE.q / lamp.length, 0], 'people on its floor and gallery', liveCase([0, yt, 0]));
   const L = LAMP, hd = L.drum + L.glass + 2.2, hc = L.cap;
-  capWind(A, lamp, 0.8 * WIND_Q * (2 * L.R * hd + (L.R + 1.6) * hc), 1 + (2 * L.R * hd * hd / 2 + (L.R + 1.6) * hc * (hd + hc / 3)) / (2 * L.R * hd + (L.R + 1.6) * hc), 'wind on the lamp room');
+  capWind(A, lamp, 0.8 * windAt(ARCH.flat + hd + hc) * (2 * L.R * hd + (L.R + 1.6) * hc), 1 + (2 * L.R * hd * hd / 2 + (L.R + 1.6) * hc * (hd + hc / 3)) / (2 * L.R * hd + (L.R + 1.6) * hc), 'wind on the lamp room');
 }
 
 // Declare, analyse, enlarge what is overworked, and again, until it all holds. A group of members that is
@@ -1249,7 +1613,7 @@ function bearingMoves(res) {
     for (const [f, why] of cases) {
       const d = sh.bearings.map(z => at(z, f)), mv = Math.max(...d.map(v => Math.hypot(...v)));
       const sl = Math.hypot(d[1][0] - d[0][0], d[1][1] - d[0][1]) / Math.abs(sh.bearings[1] - sh.bearings[0]);
-      each.push({ kase: Object.keys(f)[0], d, ratio: Math.max(mv / BEARING_MOVE, sl * ARBOR_SLOPE) });
+      each.push({ kase: Object.keys(f)[0], f, d, at: sh.bearings.map(z => [a.x, a.y, z]), slope: sl * ARBOR_SLOPE > mv / BEARING_MOVE, ratio: Math.max(mv / BEARING_MOVE, sl * ARBOR_SLOPE) });
       if (mv / BEARING_MOVE > worst.move / BEARING_MOVE || sl * ARBOR_SLOPE > worst.slope * ARBOR_SLOPE) worst = { move: Math.max(worst.move, mv), slope: Math.max(worst.slope, sl), why };
     }
     // and what the clock's own weight does, bearing by bearing: the seats are pre-set against it (see PRESET)
@@ -1266,7 +1630,10 @@ function bearingMoves(res) {
 // shims. What is left for the shims is what the computation may be out by, taken as PRESET_DOUBT of the movement, and
 // whatever differs between the weight wound up and run down; the shims hold SHIM. With the seats pre-set, every pair of
 // meshing wheels must be at its drawn centre distance under the clock's weight: MESHES, driver, follower, and where.
-const PRESET_DOUBT = 0.1, SHIM = 0.05;
+const PRESET_DOUBT = 0.25, SHIM = 0.12;
+// A housing's two feet on their shim packs, 0.8 m deep across the frame, each as wide as half the bearing's load needs
+// to bear on milled steel (AISC 360-16 J7: 1.8 Fy over 2.0, S355), at least 0.4 m and at most 0.55 (the base under them)
+const SEAT_FP = 0.9 * 355e6, seatW = (load) => Math.min(0.55, Math.max(0.4, Math.ceil(load / (2 * 0.8 * SEAT_FP) * 200) / 200));
 const MESHES = [['great', 'center', LAYER.C, 'great wheel and centre pinion'], ['center', 'third', LAYER.B, 'centre wheel and third pinion'], ['third', 'esc', LAYER.A, 'third wheel and escape pinion'],
   ['center', 'minute', LAYER.motionA, 'cannon pinion and minute wheel'], ['minute', 'center', LAYER.motionB, 'minute pinion and hour wheel']];
 function presets(res, bm) {
@@ -1283,6 +1650,9 @@ function presets(res, bm) {
   return { meshes, residual };
 }
 
+// A wall's bending out of its plane, measured from the line between its two ends at the same height (the corners, which
+// move with the walls either side of it: that is their sway along their own plane, which is held to H / WALL_LIMIT as
+// the heads' movement along them), against L / WALL_LIMIT.
 const WALL_LIMIT = 500;
 function wallMoves(res) {
   const F = res.frames.get('shell'); if (!F) return [];
@@ -1292,13 +1662,21 @@ function wallMoves(res) {
   for (const wd of ['wind +x', 'wind -x', 'wind +z', 'wind -z']) for (const cpi of [0.2, -0.3]) combos.push([`${wd}, ${cpi > 0 ? 'pressure' : 'suction'} inside`, { dead: 1, [wd]: 1, inside: cpi * WIND_Q / 1e3 }]);
   for (const [name, ax, at, L] of walls) {
     let worst = { out: 0, along: 0 };
+    const ends = new Map();
     for (let n = 0; n < F.nodes.length; n++) {
-      const p = F.nodes[n].p; if (Math.abs(p[ax] - at) > 0.05) continue;
+      const p = F.nodes[n].p; if (Math.abs(p[ax] - at) > 0.05 || Math.abs(Math.abs(p[2 - ax]) - L / 2) > 0.05) continue;
+      const k = Math.round(p[1] * 10), e = ends.get(k) || [null, null]; e[p[2 - ax] < 0 ? 0 : 1] = n; ends.set(k, e);
+    }
+    for (let n = 0; n < F.nodes.length; n++) {
+      const p = F.nodes[n].p; if (Math.abs(p[ax] - at) > 0.05 || Math.abs(p[2 - ax]) > L / 2 + 0.05 || p[1] > TOWER.H + 0.1) continue;      // (the wall's own: not a stair tower's column in line with it)
+      const e = ends.get(Math.round(p[1] * 10)), both = e && e[0] !== null && e[1] !== null, t = (p[2 - ax] + L / 2) / L;
       for (const [cname, f] of combos) {
-        let dn = 0, da = 0;
-        for (const [c, v] of Object.entries(f)) { const u = F.cases[c]; if (!u) continue; dn += v * u[6 * n + ax]; da += v * u[6 * n + (2 - ax)]; }
-        if (Math.abs(dn) > worst.out) Object.assign(worst, { out: Math.abs(dn), at: p, combo: cname });
-        if (p[1] >= TOWER.H - 0.1 && Math.abs(da) > worst.along) Object.assign(worst, { along: Math.abs(da), alongAt: p, alongCombo: cname });
+        let dn = 0, da = 0, d0 = 0, d1 = 0;
+        for (const [c, v] of Object.entries(f)) { const u = F.cases[c]; if (!u) continue; dn += v * u[6 * n + ax]; da += v * u[6 * n + (2 - ax)]; if (both) { d0 += v * u[6 * e[0] + ax]; d1 += v * u[6 * e[1] + ax]; } }
+        dn -= d0 * (1 - t) + d1 * t;
+        const unit = (i, v) => { const e = [0, 0, 0]; e[i] = v; return e; }, sg = Math.sign(dn) || 1;
+        if (Math.abs(dn) > worst.out) Object.assign(worst, { out: Math.abs(dn), at: p, combo: cname, outM: { factors: f, at: [[p, unit(ax, sg)], ...(both ? [[F.nodes[e[0]].p, unit(ax, -sg * (1 - t))], [F.nodes[e[1]].p, unit(ax, -sg * t)]] : [])] } });
+        if (p[1] >= TOWER.H - 0.1 && Math.abs(da) > worst.along) Object.assign(worst, { along: Math.abs(da), alongAt: p, alongCombo: cname, alongM: { factors: f, at: [[p, unit(2 - ax, Math.sign(da) || 1)]] } });
       }
     }
     out.push({ wall: name, L, ...worst, ratio: Math.max(worst.out / (L / WALL_LIMIT), worst.along / (TOWER.H / WALL_LIMIT)) });
@@ -1316,18 +1694,89 @@ function tonnes(name, label) {
   if (A) for (const m of A.members) if (m.label === label) { const p = A.nodes[m.a].p, q = A.nodes[m.b].p; kg += m.section.A * Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) * (m.material.rho || 0); }
   return kg || Infinity;
 }
+// Grow the groups of members that do most for a movement, or for a frequency, for their weight, until what they are
+// expected to do is what is wanted (see sensitivity in model.js). shares: each group's share of the movement (or of the
+// mode's strain energy); need: the part of the movement to take off (or how much stiffer the mode is to be, its
+// frequency squared). A group's share of a movement falls to 1/k of it when it is made k times stiffer; it adds (k - 1)
+// times its share to a mode's stiffness. Groups that can do almost nothing (under 1 %), or less than a tenth as much for
+// their weight as the best of those that can still grow, are left alone. (Stiffness grows at least as fast as the
+// plate does, and faster as a box is made deeper: each is grown by k to the 0.75, and the next pass sees the result.)
+// Returns whether any grew.
+function growFor(shares, need, kind = 'movement') {
+  let rem = need, grew = false, best = 0;
+  const list = Object.entries(shares).filter(([k, sh]) => sh > 0.01 && grow.has(k)).map(([k, sh]) => { const i = k.indexOf('|'); return { k, sh, per: sh / tonnes(k.slice(0, i), k.slice(i + 1)) }; }).sort((a, b) => b.per - a.per);
+  for (const e of list) {
+    if (rem <= 1e-3 || (best && e.per < best / 10)) break;
+    const k = kind === 'movement' ? clamp(1 / (1 - Math.min(0.375, rem / e.sh)), 1.05, 1.6) : clamp(1 + rem / e.sh, 1.05, 1.6);
+    if (grow.get(e.k)(Math.pow(k, 0.75))) { grew = true; best ||= e.per; rem -= kind === 'movement' ? e.sh * (1 - 1 / k) : e.sh * (k - 1); }
+  }
+  return grew;
+}
+const PASSES = 40;
+// People walking excite a deck up and down at 1.6 to 2.4 Hz, and its second harmonic up to 4.6 Hz less strongly; a deck
+// whose first vertical mode is above VERT_HZ is in the band of low risk (Setra 2006, range 3), and one whose first lateral
+// mode is below LAT_HZ[0] or above LAT_HZ[1] is out of the band in which a crowd locks in to its sway.
+const VERT_HZ = 2.6, LAT_HZ = [0.5, 1.2];
+// A crowd walking on a deck that sways sideways in that band falls in step with it and pushes it in time with its sway
+// (the Millennium Bridge, 2000): each person as a negative damping of DALLARD_K Ns/m (Dallard et al. 2001), taken here
+// over the whole band. A crowd locks in when it is big enough to outweigh the deck's own damping, DECK_ZETA of critical
+// for a welded steel deck. The crowd: CROWD people a square metre of deck (Setra 2006, class I: a very dense crowd), of
+// PERSON kg each. A deck that would lock in has a damper (DAMPER): a pendulum tuned to the deck's sway as Den Hartog has
+// it, for the deck without its crowd, sized so that DAMP_MARGIN times the crowd does not lock in, the crowd's own weight
+// detuning it as it does.
+const CROWD = 1.0, PERSON = 70, DALLARD_K = 300, DECK_ZETA = 0.005, DAMP_MARGIN = 1.25;
+// A deck's sideways mode as the check sees it, with its damper: the mode's mass without the damper's block (which is
+// lumped in the analysis at the cross beam it hangs from, the mode found with it there), its stiffness, its movement where
+// the block hangs, the block, and what the block is tuned to.
+function swayOf(name, m) {
+  const dm = dampers.get(name), kg = dm ? sizes.get(`${name}|damper`) || 0 : 0, axis = m.lateralAxis ?? 2;
+  const phi = dm && m.lateralAlong?.length ? m.lateralAlong.reduce((b, p) => Math.abs(p[0] - dm.x) < Math.abs(b[0] - dm.x) ? p : b)[1] : 1;
+  const K = m.lateralMass * (2 * Math.PI * m.lateral) ** 2, M = Math.max(1, m.lateralMass - kg * phi * phi);
+  const b = BRIDGES[name.slice(5)], area = b ? 130 * Math.abs(b.z1 - b.z0) : 0;
+  return { M, K, phi: Math.max(phi, 1e-3), kg, hz: sizes.get(`${name}|damper hz`) || 0, zeta: sizes.get(`${name}|damper zeta`) || 0, f0: Math.sqrt(K / M) / (2 * Math.PI), mean: m.lateralMean ?? 0.5, crowd: CROWD * area, axis, dm };
+}
+// Den Hartog's tuning for a block of kg on a mode (d): its frequency and its dashpots' damping ratio
+const tuning = (d, kg) => { const mu = kg * d.phi * d.phi / d.M; return { hz: d.f0 / (1 + mu), zeta: Math.sqrt(3 * mu / (8 * (1 + mu) ** 3)), mu }; };
+// Does the mode (d) stay stable with n people walking in step with it? The deck's mode (modal mass and the crowd's share
+// of the crowd's weight, its stiffness, its own damping less the crowd's push) and the block (its mass, the spring of its
+// pendulum, its dashpots), coupled where it hangs: stable when every root of the pair's characteristic quartic is in the
+// left half plane (Routh-Hurwitz). Without a block, when the deck's own damping outweighs the crowd's push; which is
+// Dallard's N = 8 pi zeta f M / k for a mode shaped as a sine, whose mean square is a half.
+function swayStable(d, n, kg = d.kg, hz = d.hz, zeta = d.zeta) {
+  const p2 = d.phi * d.phi, M = (d.M + n * PERSON * d.mean) / p2, K = d.K / p2, C = (2 * DECK_ZETA * Math.sqrt(d.K * d.M) - n * DALLARD_K * d.mean) / p2;
+  if (!(kg > 0)) return C > 0;
+  const wt = 2 * Math.PI * hz, kt = kg * wt * wt, ct = 2 * zeta * kg * wt, mt = kg;
+  const a4 = mt * M, a3 = mt * C + (M + mt) * ct, a2 = mt * K + (M + mt) * kt + C * ct, a1 = C * kt + K * ct, a0 = K * kt;
+  return a3 > 0 && a2 > 0 && a1 > 0 && a0 > 0 && a3 * a2 > a4 * a1 && a3 * a2 * a1 > a4 * a1 * a1 + a3 * a3 * a0;
+}
+// The most people the mode (d) carries without locking in, with its damper as it is
+function lockIn(d) {
+  let lo = 0, hi = 1e5;
+  if (!swayStable(d, 0)) return 0;
+  for (let i = 0; i < 50; i++) { const n = (lo + hi) / 2; if (swayStable(d, n)) lo = n; else hi = n; }
+  return lo;
+}
+const inBand = (m) => m.lateral > LAT_HZ[0] && m.lateral < LAT_HZ[1];
 function designLoop() {
-  let res; const t0 = performance.now();
-  for (passes = 1; passes <= 14; passes++) {           // (a page has to load: what still does not hold after this many tries is reported as it is)
+  let res, exact = false; const t0 = performance.now(), tried = new Map(), stuck = new Map(), out = new Set(), trace = timing.trace = [];
+  for (passes = 1; passes <= PASSES; passes++) {       // (a page has to load: what still does not hold after this many tries is reported as it is)
     grow.clear();
     declare();
-    res = analyse({ fast: true });
-    let grew = false;
+    res = analyse(exact ? { exact: true } : {});
+    let grew = false; out.clear();
     const bump = (row, label, f) => { const g = grow.get(`${row.name ?? row}|${label}`); if (g && g(f)) { grew = true; return true; } return false; };
     const unstable = new Map();
     for (const row of res.rows) {
-      for (const [label, u] of Object.entries(row.byLabel || {})) if (u > 0.92) bump(row, label, clamp(Math.pow(u / 0.85, 0.8), 1.05, 2.5));
-      if (row.lambda < BUCKLING_FACTOR * 1.03 && row.shareLabel) for (const [label, sh] of Object.entries(row.shareLabel)) {
+      // (a member as big as its room allows that still buckles is held by making stiffer the frame it buckles with)
+      // (but not one that three passes of it have not helped by a hundredth)
+      let held = false;
+      for (const [label, u] of Object.entries(row.byLabel || {})) if (u > 0.92 && !bump(row, label, clamp(Math.pow(u / 0.85, 0.8), 1.05, 2.5)) && u > 0.97 && row.whyLabel?.[label] === 'buckling') {
+        const key = `held ${row.name}|${label}`, was = tried.get(key) || { ratio: Infinity, idle: 0 }, idle = u > was.ratio * 0.99 ? was.idle + 1 : 0;
+        tried.set(key, { ratio: Math.min(u, was.ratio), idle });
+        trace.push([passes, key, +u.toFixed(3), idle, +(row.lambda ?? 0).toFixed(2)]);
+        if (idle < 3) held = true;
+      }
+      if ((row.lambda < BUCKLING_FACTOR * 1.03 || held) && row.shareLabel) for (const [label, sh] of Object.entries(row.shareLabel)) {
         if (!unstable.has(row.frame)) unstable.set(row.frame, []);
         unstable.get(row.frame).push({ row, label, sh });
       }
@@ -1338,45 +1787,105 @@ function designLoop() {
     // almost none, nor one that does less than a tenth as much for its weight as the best of those that can still grow.
     // (The groups that do most of all may already be as big as their room allows, as a tower's legs are where they
     // pass between wheels: then it is the next ones, and the frame is made stiff where it still can be, not heavy.)
-    for (const list of unstable.values()) {
+    const stiffening = new Set();
+    for (const [frame, list] of unstable) {
       let held = 0, best = 0;
       for (const e of list.filter(e => e.sh >= 0.004).map(e => ({ ...e, per: e.sh / tonnes(e.row.name, e.label) })).sort((a, b) => b.per - a.per)) {
         if (held >= 1 / 3 || e.per < best / 10) break;
-        if (bump(e.row, e.label, clamp(Math.pow(BUCKLING_FACTOR * 1.1 / Math.max(e.row.lambda, 0.1), 0.5), 1.05, 1.6))) { held += e.sh; best ||= e.per; }
+        if (bump(e.row, e.label, clamp(Math.pow(BUCKLING_FACTOR * 1.1 / Math.max(e.row.lambda, 0.1), 0.5), 1.05, 1.6))) { held += e.sh; best ||= e.per; stiffening.add(frame); }
       }
     }
-    // A tower whose bearing moves too far: enlarge the members that would hold that bearing still, those of the frame it
-    // is in where it moves in that frame's plane (the frame's legs, ties and braces), its legs in both frames and the
-    // struts between them where it moves along the arbor. The passes here are the quick analysis and the check is the
-    // exact one, so each is designed with something in hand; under the pendulum's swing, to four fifths of what it may
-    // move. That is the movement that comes back with every beat, and the pendulum's own suspension is one of the
-    // bearings: a frame that gives with the swing takes energy from it and alters its rate, and the clock's rate is
-    // the thing it is for. (Under the winding, which comes three times a day, a bearing is let come nearer its limit.)
+    const lt = res.frames.get('towers')?.lambda ?? BUCKLING_FACTOR, amp = (l) => l > 1.05 && isFinite(l) ? 1 / (1 - 1 / l) : 1;
+    const asIf = stiffening.has('towers') ? amp(Math.max(lt, BUCKLING_FACTOR)) / amp(lt) : 1;         // (once the towers can be made no stiffer, as they are)
+    // Each movement and frequency that is out is helped by the groups of members that do most for it (growFor). One that
+    // has been helped three passes running and is no better for it (by 1 % or more) is not helped again: growing what
+    // does not help it is waste. Nor is one that nothing which could still grow helps. Either is reported (stuck). (A pass
+    // in which its frame is still being stiffened against buckling is not counted against it: it is judged then as the
+    // frame will be, and growing for both at once is not waste.)
+    const help = (key, ratio, what, fn, frame) => {
+      const was = tried.get(key) || { ratio: Infinity, idle: 0 }; out.add(key);
+      const idle = ratio > was.ratio * 0.99 && !stiffening.has(frame) ? was.idle + 1 : ratio > was.ratio * 0.99 ? was.idle : 0;
+      trace.push([passes, key, +ratio.toFixed(3), idle, +lt.toFixed(2)]);
+      if (idle >= 3) { stuck.set(key, what); return; }
+      if (fn()) { grew = true; tried.set(key, { ratio: Math.min(ratio, was.ratio), idle }); } else stuck.set(key, what);
+    };
+    // A tower whose bearing moves too far: the members that hold that bearing still, by how much each does for that
+    // movement. The passes here are the quick analysis and the check is the exact one, so each is designed with something
+    // in hand; under the pendulum's swing, to four fifths of what it may move. That is the movement that comes back with
+    // every beat, and the pendulum's own suspension is one of the bearings: a frame that gives with the swing takes energy
+    // from it and alters its rate, and the clock's rate is the thing it is for. (Under the winding, which comes three
+    // times a day, a bearing is let come nearer its limit.)
     // (The quick analysis amplifies every movement by 1 / (1 - 1 / lambda), the amplification of a frame's sway, where
     // lambda is how many times its load the frame would buckle under; a tower not yet stiff enough not to buckle at
-    // 2.5 times its load is grown for that above, and its movements are judged as they will be when it is: amplified
-    // as for 2.5. Otherwise a frame halfway there would have its bearings' movements counted several times over, and
-    // be made heavy for movements it will not have. And towers that would buckle under their own weight, as they do in
+    // BUCKLING_FACTOR times its load is grown for that above, and while it still is, its movements are judged as they
+    // will be when it is. Otherwise a frame halfway there would have its bearings' movements counted several times over,
+    // and be made heavy for movements it will not have. And towers that would buckle under their own weight, as they do in
     // the first passes from cold, have no movements to speak of: they are only grown to stand up.)
-    const lt = res.frames.get('towers')?.lambda ?? BUCKLING_FACTOR, amp = (l) => l > 1.05 && isFinite(l) ? 1 / (1 - 1 / l) : 1;
-    const asIf = amp(Math.max(lt, BUCKLING_FACTOR)) / amp(lt);
-    if (lt > 1.05) for (const b of bearingMoves(res)) for (const c0 of b.each) {
-      const c = { ...c0, ratio: c0.ratio * asIf }, limit = c.kase === 'pendulum' ? 0.8 : 0.95;
-      if (c.ratio <= limit) continue;
-      const row = res.rows.find(r => r.name === b.tower), big = Math.max(...c.d.map(v => Math.hypot(...v)), 1e-12);
-      const moving = c.d.map((v, i) => ({ v, side: i ? 'front' : 'back' })).filter(q => Math.hypot(...q.v) >= 0.5 * big);
-      const along = moving.some(q => Math.abs(q.v[2]) >= Math.hypot(q.v[0], q.v[1])), across = moving.some(q => Math.abs(q.v[2]) < Math.hypot(q.v[0], q.v[1]));
-      const wanted = (label) => label.startsWith('leg') ? (along || moving.some(q => label.startsWith(`leg, ${q.side} frame`))) : label === 'strut' ? along : (label === 'brace' || label === 'tie beam') && across;
-      for (const label of Object.keys(row?.byLabel || {})) if (wanted(label)) bump(row, label, clamp(Math.pow(c.ratio / (limit - 0.05), 0.6), 1.05, 1.6));
+    if (lt > 1.05) for (const b of bearingMoves(res)) for (const c of b.each) {
+      const ratio = c.ratio * asIf, limit = c.kase === 'pendulum' ? 0.8 : 0.95;
+      if (ratio <= limit) continue;
+      // (the bearing that moves most, the way it moves; or, where the arbor's slope governs, one bearing against the other)
+      const len = (v) => Math.hypot(...v) || 1, i = len(c.d[1]) > len(c.d[0]) ? 1 : 0, rel = [0, 1, 2].map(k => k < 2 ? c.d[1][k] - c.d[0][k] : 0);
+      const at = c.slope ? [[c.at[1], rel.map(v => v / len(rel))], [c.at[0], rel.map(v => -v / len(rel))]] : [[c.at[i], c.d[i].map(v => v / len(c.d[i]))]];
+      help(`bearing ${b.arbor} ${c.kase}`, ratio, `the ${b.arbor} arbor's bearings under the ${c.kase}`, () => { const sv = sensitivity(res, 'towers', at, c.f); return !!sv && growFor(sv.shares, 1 - (limit - 0.05) / ratio); }, 'towers');
     }
+    // A crossing whose deck would bounce under people's steps (its first vertical mode in the band their walking excites,
+    // up to VERT_HZ): what holds that mode, by its share of the mode's strain energy. And one whose first sideways mode is
+    // in the band in which a crowd locks in to its sway: its damper, the lightest block that keeps DAMP_MARGIN times its
+    // crowd from locking in, tuned to the deck as it now is (and retuned, as the deck's sizes change).
+    for (const F of res.frames.values()) for (const [name, m] of Object.entries(F.modes || {})) {
+      if (m.vertical === undefined) continue;
+      if (m.vertical < VERT_HZ * 1.03) help(`${name} vertical`, VERT_HZ / m.vertical, `${name}, up and down`, () => growFor(m.verticalShare, (VERT_HZ * 1.05 / m.vertical) ** 2 - 1, 'frequency'), F.name);
+      const d = swayOf(name, m);
+      if (!inBand(m) || !d.dm) continue;
+      const need = DAMP_MARGIN * d.crowd, t = tuning(d, d.kg);
+      if (lockIn(d) >= need / 1.1) { if (d.kg && Math.abs(d.hz / t.hz - 1) >= 0.01) { sizes.set(`${name}|damper hz`, t.hz); sizes.set(`${name}|damper zeta`, t.zeta); grew = true; } continue; }
+      help(`${name} damper`, need / Math.max(1, lockIn(d)), `${name}'s damper`, () => {
+        const ok = (kg) => { const u = tuning(d, kg); return swayStable(d, need, kg, u.hz, u.zeta); };
+        let kg = DAMPER.most;
+        if (ok(kg)) { let lo = 0; for (let i = 0; i < 40; i++) { const k = (lo + kg) / 2; if (ok(k)) kg = k; else lo = k; } }
+        const u = tuning(d, kg);
+        if (Math.abs(kg - d.kg) < 0.02 * kg && Math.abs(d.hz / u.hz - 1) < 0.01) return false;
+        sizes.set(`${name}|damper`, kg); sizes.set(`${name}|damper hz`, u.hz); sizes.set(`${name}|damper zeta`, u.zeta);
+        return true;
+      }, F.name);
+    }
+    // A slender stack whose vortices would shed in step with its sway in a wind it may meet (EN 1991-1-4 E.1.3.1) and
+    // sway it harder than its wind: what holds its first sideways mode, until they would not.
+    // One that has room for a damper (A.slender.damper: the stair towers, SPIRE) first has the lightest that keeps that
+    // push within the wind (with a twentieth in hand), tuned to it as it now is, and retuned as it changes; sized only once
+    // nothing else is growing, as the frame's sizes settle. Only if the biggest that fits will not do is the frame grown.
+    for (const F of res.frames.values()) for (const [name, m] of Object.entries(F.modes || {})) {
+      const S = getAssembly(name)?.slender; if (!S?.damper || !(m.lateralMass > 0) || grew) continue;
+      const kg0 = sizes.get(`${name}|damper`) || 0, at = (kg) => { if (!(kg > 0)) return vortexOf(name, S, m); const t = stackTuning(m, kg); return vortexOf(name, S, m, tunedDecrement(m.lateral, m.lateralMass, m.lateralTop ?? 1, kg, t.hz, t.zeta)); };
+      const fits = (kg) => { const v = at(kg); return v.Fw <= 0.95 * v.Fd; };
+      let kg = 0;
+      if (!fits(0)) { if (fits(S.damper)) { let lo = 0, hi = S.damper; for (let i = 0; i < 30; i++) { const k = (lo + hi) / 2; if (fits(k)) hi = k; else lo = k; } kg = hi; } else kg = S.damper; }
+      const keep = kg0 > 0 && at(kg0).ok && kg <= kg0 && kg >= kg0 * 0.9;          // (what is there will do, and is not much more than needed)
+      const use = keep ? kg0 : kg, t = use > 0 ? stackTuning(m, use) : { hz: 0, zeta: 0 };
+      if (Math.abs(use - kg0) > 1 || (use > 0 && Math.abs(t.hz / (sizes.get(`${name}|damper hz`) || 1) - 1) >= 0.01)) {
+        sizes.set(`${name}|damper`, use); sizes.set(`${name}|damper hz`, t.hz); sizes.set(`${name}|damper zeta`, t.zeta); grew = true;
+      }
+    }
+    for (const v of vortex(res)) if (!v.ok) {
+      const S = getAssembly(v.name)?.slender;
+      if (S?.damper && (grew || (v.kg || 0) < S.damper - 1)) continue;          // (its damper first, above)
+      const m = frameOf(res, v.name)?.modes?.[v.name];
+      help(`${v.name} vortex`, 1.3 * v.vm / v.vcrit, `${v.name}'s sway in step with its vortices`, () => !!m?.lateralShare && growFor(m.lateralShare, (1.3 * v.vm / v.vcrit) ** 2 - 1, 'frequency'), frameOf(res, v.name)?.name);
+    }
+    // A wall that bends too far out of its plane, or whose head moves too far along it: what does most for that movement.
     for (const w of wallMoves(res)) if (w.ratio > 0.95) {
-      const f = clamp(Math.pow(w.ratio / 0.9, 0.6), 1.05, 1.6), wt = `wind truss ${w.wall.slice(6)}`;
-      for (const label of ['chord', 'post', 'diagonal']) bump(wt, label, f);
-      bump(w.wall, 'wind girder', f);
+      const m = w.out / (w.L / WALL_LIMIT) >= w.along / (TOWER.H / WALL_LIMIT) ? w.outM : w.alongM;
+      help(`${w.wall} movement`, w.ratio, `${w.wall}'s movement under the wind`, () => { const sv = m && sensitivity(res, 'shell', m.at, m.factors); return !!sv && growFor(sv.shares, 1 - 0.9 / w.ratio); }, 'shell');
     }
-    if (!grew) break;
+    // (when nothing more grows, once more with the exact analysis the check runs, whose least critical load factors
+    // are found more closely: a member it finds overworked is grown too. Not when nothing grew at all: the sizes are a
+    // seed's, which went through that already.)
+    // (and what was stuck on the quick analysis is tried again on the exact one, which may find it otherwise)
+    if (!grew) { if (exact || passes === 1) break; exact = true; tried.clear(); stuck.clear(); }
   }
   timing.design = performance.now() - t0; timing.frames = res.ms; lastResult = res;
+  timing.stuck = [...stuck].filter(([k]) => out.has(k)).map(([, v]) => v);         // (what is still out, and nothing grown helped)
   feet = res.terminal.ground.filter(t => t.from.startsWith('tower')).map(t => ({ p: t.p, load: Math.abs(t.f[1]), tower: t.from }));
 }
 
@@ -1424,14 +1933,18 @@ function pedestals(list) {
 }
 
 // ---- the foundations. Under the floor is one raft of reinforced concrete on rock, as big as the building. Each leg
-// of a tower stands on a pedestal on it (above); each column of the walls on a steel grillage cast into the raft's
-// top at the column's foot, long along the wall and reaching in from the raft's edge as far as the rock under it needs;
-// each column of the stair towers, the escape turrets and the stack, which stand outside the raft, on a grillage in
-// the top of a footing of its own under the whole of what it is under, which it shares with the other columns there. They are designed here
-// from the loads the design loop found, drawn at that size, and checked in structuralCheck against the exact analysis.
-// The rock is a site requirement: strong rock, taken at ROCK (the usual presumed bearing value for strong limestone or
-// hard sandstone), to be proved by investigation before anything is built.
-const ROCK = 4.0e6, RAFTS = [3, 4, 5, 6, 8, 10], GRILLAGE_MAX = 10;
+// of a tower stands on a pedestal of reinforced concrete on it (above); each column of the walls on a steel grillage
+// cast into the raft's top at the column's foot, long along the wall and reaching in from the raft's edge as far as the
+// rock under it needs; each column of the stair towers, the escape turrets and the stack, which stand outside the
+// raft, on a grillage in the top of a footing of its own under the whole of what it is under. Every one is designed for
+// every combination (COMBOS) from what the analysis hands down at its foot, the moments with the forces: the concrete
+// under its plate, pressed over a block at one edge; its anchors, pulling for the rest and holding it against
+// lifting and, with friction, against sliding; the rock under it with the moments; and punching of the raft. A
+// grillage is a grid of steel cast into the raft that spreads its column's load evenly over its footprint (its steel
+// is not checked), so its column's moments are taken about the column. They are drawn at that size, and checked in structuralCheck against the
+// exact analysis. The rock is a site requirement: strong rock, taken at ROCK (the usual presumed bearing value for
+// strong limestone or hard sandstone), to be proved by investigation before anything is built.
+const ROCK = 4.0e6, RAFTS = [3, 4, 5, 6, 8, 10], GRILLAGE_MAX = 10, PED_GRILLAGE = 14;
 const vRdc = (d) => 0.12 * Math.min(2, 1 + Math.sqrt(0.2 / d)) * Math.cbrt(100 * 0.005 * 40) * 1e6;      // EN 1992-1-1 6.4.4, rho 0.5 %, fck 40
 const VRD_MAX = 0.4 * 0.6 * (1 - 40 / 250) * 40e6 / 1.5;                                                // at the face of the loaded area, 6.4.5(3)
 // Punching of a column base, EN 1992-1-1 6.4.4(2): on a control perimeter a out from the loaded area (B by D), the
@@ -1452,11 +1965,71 @@ function punching(N, B, D, raft, spread, edges = 0, s = Infinity) {
   return worst;
 }
 let foundation = null;
-// What stands on the ground, as it presses down: the clock going (its own weight and the teeth), and for the upright
-// shafts of the winding gear the worms' push down them while the weight is wound too, when that is down (the left).
-const UPRIGHT_PAD = 3.0;                              // the upright shafts' pedestals, as drawn
+// The anchors: grade 10.9 bars (fub ANCHOR_FUB), n of them d across round the plate's edge, a quarter of them along
+// each side, the fewest and thinnest that do. Each may pull 0.75 fub on its area over 2.0 and take 0.45 fub over 2.0
+// across (AISC 360-16 J3.6, ASD). What they pull is taken down into the concrete by anchor reinforcement lapped with
+// them (EN 1992-4 7.2.1.9: bars of grade 500 at 0.6 fyk, anchored below where a cone could break out), since a cone of
+// plain concrete could not hold it. Friction under a plate, steel on grout: MU (EN 1993-1-8 6.2.2(6)), with 1.5 in hand.
+const MU = 0.2, ANCHOR_FUB = 1000e6, BAR_FY = 0.6 * 500e6;
+const BOLT_T = (d) => 0.75 * ANCHOR_FUB * Math.PI * d * d / 4 / 2.0, BOLT_V = (d) => 0.45 * ANCHOR_FUB * Math.PI * d * d / 4 / 2.0;
+const ANCHORS = [4, 8, 12, 16, 24, 32, 48, 64, 96].flatMap(n => [0.036, 0.048, 0.064, 0.076, 0.1].map(d => ({ n, d, T: n / 4 * BOLT_T(d), V: n * BOLT_V(d) }))).sort((a, b) => a.n * a.d * a.d - b.n * b.d * b.d);
+// A foot's forces in every combination, from what stands on it (each terminal's moments, and its push or pull off the
+// middle c of the plate): N down, H sideways, Mx tipping it along z, Mz along x.
+function footCases(terms, c) {
+  return COMBOS.map(cb => {
+    let N = 0, Hx = 0, Hz = 0, Mx = 0, Mz = 0;
+    for (const t of terms) {
+      const F = [0, 0, 0, 0, 0, 0];
+      for (const [k, v] of Object.entries(cb.f)) { const f = t.cases[k]; if (f) for (let d = 0; d < 6; d++) F[d] += v * f[d]; }
+      const n = -F[1]; N += n; Hx += F[0]; Hz += F[2]; Mx += F[3] + n * (t.p[2] - c[1]); Mz += F[5] - n * (t.p[0] - c[0]);
+    }
+    return { name: cb.name, N, H: Math.hypot(Hx, Hz), Mx: Math.abs(Mx), Mz: Math.abs(Mz) };
+  });
+}
+// A plate B long (the way the moment M tips it) by W across, pressed down by N (a pull is negative), its anchors at
+// 0.4 B either side of its middle: AISC Design Guide 1 (2nd ed., 3.3 and 3.4). The concrete bears at most fp over a
+// block Y long at the pressed edge, and the anchors on the other edge pull T for the rest; with a pull, both edges'
+// anchors share it. { T, sig, ok } (ok false: no block fits under the plate)
+function basePlate(N, M, B, W, fp) {
+  const f = 0.4 * B, q = fp * W;
+  if (N > 0 && M <= N * (B / 2 - N / (2 * q))) return { T: 0, sig: N / ((B - 2 * M / N) * W), ok: true };
+  if (N <= 0 && M <= -N * f) return { T: -N / 2 + M / (2 * f), sig: 0, ok: true };
+  const disc = (B / 2 + f) ** 2 - 2 * (M + N * f) / q;
+  if (disc < 0) return { T: Infinity, sig: Infinity, ok: false };
+  const Y = B / 2 + f - Math.sqrt(disc);
+  return { T: q * Y - N, sig: fp, ok: true };
+}
+// A plate bx (along x) by dz on concrete under the combinations cs, each way separately and what the anchors of a side
+// pull the two ways added (those at a corner take both): the pull a side's anchors must give, the anchors that give it
+// (or `use`, those drawn), the most the concrete under it is pressed, how near it comes to sliding (friction with 1.5
+// in hand, and half what the anchors may take across), and the anchor reinforcement a side needs. A grillage cast into
+// the raft (castIn) is held down not by anchors through a plate but by its hold-down bars, lapped with the raft's
+// bottom steel, as many as the pull asks; the raft then holds the pull with its weight (see liftOf).
+function plateOn(cs, bx, dz, fp, use = null, castIn = false) {
+  let need = 0, sig = 0, ok = true, Hmax = 0;
+  for (const c of cs) {
+    const a = basePlate(c.N, c.Mz, bx, dz, fp), b = basePlate(c.N, c.Mx, dz, bx, fp);
+    need = Math.max(need, a.T + b.T); sig = Math.max(sig, a.sig, b.sig); ok = ok && a.ok && b.ok;
+  }
+  const slideOf = (q) => Math.max(0, ...cs.map(c => c.H / (MU * Math.max(0, c.N) / 1.5 + 0.5 * q.V)));
+  const a = use || ANCHORS.find(q => q.T >= need && slideOf(q) <= 1) || { ...ANCHORS[ANCHORS.length - 1], short: true };
+  for (const c of cs) Hmax = Math.max(Hmax, c.H);
+  return { need, anchors: a, sig, ok, slide: slideOf(a), bars: need / BAR_FY, Nmax: Math.max(0, ...cs.map(c => c.N)), short: castIn ? !ok : !!a.short || a.T < need * (1 - 1e-9) || !ok };
+}
+// The rock under a footing's spread (Bs along x by Ds), with the moments, and the raft's own weight
+const rockUnder = (cs, Bs, Ds, own) => own + Math.max(...cs.map(c => Math.max(0, c.N) / (Bs * Ds) + 6 * c.Mz / (Bs * Bs * Ds) + 6 * c.Mx / (Bs * Ds * Ds)));
+// A grillage cast into the raft pulled up (a tower's foot as the earthquake rocks it): the raft takes the pull as a plate
+// on the rock (see raftBending), and must not lift; what holds it down is its own weight over the length its bending
+// spreads along (pi / beta) each way, at 0.9 (EN 1990, the equilibrium case).
+function liftOf(cs, Bs, Ds, t) {
+  const conc = MATERIAL.concrete, b = Math.max(Bs, Ds), ks = GROUND.E / (b * (1 - GROUND.nu ** 2)), EI = conc.E * b * t ** 3 / 12, beta = Math.pow(ks * b / (4 * EI), 0.25);
+  const span = Math.max(b, Math.PI / beta);
+  return { pull: Math.max(0, ...cs.map(c => -c.N)), holds: 0.9 * span * span * t * conc.rho * GRAVITY };
+}
+// The most each terminal on the ground presses down in any combination
+const downMost = (t) => Math.max(0, ...COMBOS.map(cb => -Object.entries(cb.f).reduce((s, [k, v]) => s + v * (t.cases[k]?.[1] || 0), 0)));
 function groundLoads(res) {
-  return res.terminal.ground.map(t => ({ p: t.p, N: -t.f[1] + (t.from.startsWith('upright') ? Math.max(0, -(t.cases.winding?.[1] || 0)) : 0), from: t.from })).filter(t => t.N > 0);
+  return res.terminal.ground.map(t => ({ p: t.p, N: downMost(t), from: t.from, t })).filter(t => t.N > 0);
 }
 // The right-hand upright shaft's foot, which the worm pulls up while the weight is wound. Its footstep is double-acting
 // and its casting is held down by ANCHOR.n rods round a circle ANCHOR.D across, headed and cast into the raft ANCHOR.hef
@@ -1473,78 +2046,203 @@ function uprightAnchor(res) {
   const edge = TOWER.hz + TOWER.wall - Math.abs(t.p[2]);
   return { W, P, M, N, Md, bolt, FtRd, T, NRdc, edge, ok: bolt <= FtRd && T <= NRdc && edge >= 1.5 * A.hef };
 }
-function designFoundations(res) {
-  const conc = MATERIAL.concrete, ox = TOWER.hx + TOWER.wall, oz = TOWER.hz + TOWER.wall;
-  const loads = groundLoads(res);
-  const peds = pedestals(loads.filter(t => t.from.startsWith('tower')).map(t => ({ p: t.p, load: t.N, tower: t.from })));
-  // the wall columns, wall by wall in order along it, and how far each is from the next
-  const cols = [];
+const UPRIGHT_PAD = 3.0;
+// The room on the floor for a pedestal centred at c (x, z): no further than the spaces that must stay empty (a doorway)
+// allow, made narrower whichever way keeps it the bigger.
+function clipRoom(c, room) {
+  let [B, D] = room;
+  for (const z of G.clear) {
+    if (z.lo[1] >= FOOT || z.hi[1] <= 0) continue;
+    const inX = Math.abs((z.lo[0] + z.hi[0]) / 2 - c[0]) < (z.hi[0] - z.lo[0] + B) / 2, inZ = Math.abs((z.lo[2] + z.hi[2]) / 2 - c[1]) < (z.hi[2] - z.lo[2] + D) / 2;
+    if (!inX || !inZ) continue;
+    const gap = (i) => c[i ? 1 : 0] < z.lo[i ? 2 : 0] ? z.lo[i ? 2 : 0] - c[i ? 1 : 0] : c[i ? 1 : 0] > z.hi[i ? 2 : 0] ? c[i ? 1 : 0] - z.hi[i ? 2 : 0] : 0;
+    const bx = 2 * Math.max(0, gap(0) - 0.1), dz = 2 * Math.max(0, gap(1) - 0.1);        // (and a hand's breadth clear of it)
+    if (bx * D >= B * dz) B = Math.min(B, bx); else D = Math.min(D, dz);
+  }
+  return [B, D];
+}                              // the upright shafts' pedestals, as drawn
+const near = (p, q) => Math.hypot(p[0] - q[0], p[2] - q[2]) < 0.5;
+// Every footing, designed (sizes and anchors) or, with `drawn`, checked as drawn: { what, terms, c, B, D (plan, along x
+// and z), plate [bx, dz], Bs, Ds (the spread on the rock), edges, s, ... }
+function footings(res, raft, drawn = null) {
+  const conc = MATERIAL.concrete, ox = TOWER.hx + TOWER.wall, oz = TOWER.hz + TOWER.wall, own = raft * conc.rho * GRAVITY, fcU = PED_USE * conc.fc, hefOf = (extra) => Math.min(raft - 0.3, 2.5) + extra;
+  const loads = groundLoads(res), out = [];
+  const settle = (f) => {
+    const terms = loads.filter(t => f.match(t)).map(t => t.t), cs = footCases(terms, f.mc || f.c);
+    let pl = plateOn(cs, f.plate[0], f.plate[1], drawn ? conc.fc : fcU, drawn ? f.anchors : null, f.castIn);
+    // (designing: a plate the concrete under it cannot bear, or whose anchors would be too many, or one that presses
+    // the rock under it too hard, is made bigger, as far as its room allows)
+    for (let k = 0; !drawn && k < 12 && (pl.sig > fcU || pl.short || rockUnder(cs, f.Bs(), f.Ds(), own) > ROCK); k++) {
+      const g = Math.min(1.25, Math.max(1.05, Math.sqrt(Math.max(pl.sig / fcU, rockUnder(cs, f.Bs(), f.Ds(), own) / ROCK)) * 1.02)), was = f.plate.join();
+      f.grow(g); if (f.plate.join() === was) break;
+      pl = plateOn(cs, f.plate[0], f.plate[1], fcU, null, f.castIn);
+    }
+    const Nmax = Math.max(0, ...cs.map(c => c.N)), lift = f.castIn ? liftOf(cs, f.Bs(), f.Ds(), raft) : { pull: 0, holds: Infinity };
+    return { ...f, terms, N: Nmax, ...pl, anchors: pl.anchors, bearing: pl.sig, lift, rock: rockUnder(cs, f.Bs(), f.Ds(), own), punch: punching(Nmax, f.steel ? f.plate[0] : f.B, f.steel ? f.plate[1] : f.D, raft, f.Bs() * f.Ds(), f.edges, f.s) };
+  };
+  // the towers' pedestals (on each, one foot or several side by side)
+  const peds = drawn ? drawn.peds : pedestals(loads.filter(t => t.from.startsWith('tower')).map(t => ({ p: t.p, load: t.N, tower: t.from })));
+  for (const q0 of peds) {
+    const q = { ...q0, what: `pedestal under ${q0.towers.join(' and ')}`, edges: 0, s: Infinity, hef: hefOf(FOOT) };
+    const room = q0.room || clipRoom(q0.c, [0, 2].map(i => Math.max(...q0.ps.map(o => o.f.p[i])) - Math.min(...q0.ps.map(o => o.f.p[i])) + (i ? 4.0 : 6.4)));
+    if (!drawn) { q.B = Math.min(q.B, room[0]); q.D = Math.min(q.D, room[1]); }
+    Object.assign(q, { room, match: (t) => t.from.startsWith('tower') && q0.ps.some(o => near(o.f.p, t.p)), plate: [q0.B - 0.4, q0.D - 0.2], Bs: () => q.B + raft, Ds: () => q.D + raft,
+      grow: (g) => { q.B = Math.min(room[0], q.B * g); q.D = Math.min(room[1], q.D * g); q.plate = [q.B - 0.4, q.D - 0.2]; q.capped = q.B >= room[0] - 1e-6 && q.D >= room[1] - 1e-6; } });
+    let r = { kind: 'pedestal', ...settle(q), room };
+    // a foot heavier than concrete in the room on the floor can bear stands instead on a block of steel, on a grillage
+    // cast into the raft's top under the floor as big as the raft's concrete needs (up to PED_GRILLAGE each way, and
+    // clear of every other)
+    if (drawn ? q0.steel : r.capped || r.short || r.sig > fcU) {
+      const st = { ...q, steel: true, castIn: true, B: r.B, D: r.D, plate: drawn ? q0.plate : [r.B, r.D] };
+      Object.assign(st, { Bs: () => st.plate[0] + raft, Ds: () => st.plate[1] + raft, grow: (g) => { st.plate = st.plate.map(v => Math.min(PED_GRILLAGE, v * g)); } });
+      r = { kind: 'pedestal', ...settle(st), room, capped: false };
+      r.big = r.plate.some(v => v >= PED_GRILLAGE - 1e-6) && (r.short || r.sig > fcU);
+    }
+    out.push(r);
+  }
+  // Steel grillages that would run into each other under the floor are one grillage under all their blocks, the
+  // rectangle round them, designed for all their feet together (their own designs set aside: `hidden`), and for the
+  // feet of any concrete pedestal standing over it as well (whose own design stands too).
+  const fpr = (f) => { const [b, d] = f.steel ? f.plate : [f.B, f.D]; return [f.c[0] - b / 2, f.c[1] - d / 2, f.c[0] + b / 2, f.c[1] + d / 2]; };
+  const hit = (a, b) => { const p = fpr(a), q = fpr(b); return p[0] < q[2] - 1e-6 && q[0] < p[2] - 1e-6 && p[1] < q[3] - 1e-6 && q[1] < p[3] - 1e-6; };
+  const together = [];
+  for (const f of out.filter(o => o.kind === 'pedestal' && o.steel)) {
+    const g = together.filter(G => G.some(o => hit(o, f))), merged = [f, ...g.flat()];
+    for (const G of g) together.splice(together.indexOf(G), 1);
+    together.push(merged);
+  }
+  for (const G of together) {
+    const riders = out.filter(o => o.kind === 'pedestal' && !o.steel && G.some(f => hit(o, f)));
+    if (G.length < 2 && !riders.length) continue;
+    const box = G.map(fpr).reduce((m, p) => [Math.min(m[0], p[0]), Math.min(m[1], p[1]), Math.max(m[2], p[2]), Math.max(m[3], p[3])]);
+    const what = `one grillage under ${[...G, ...riders].map(f => f.what.replace('pedestal under ', '')).join(', ')}`, prev = drawn && drawn.all.find(o => o.kind === 'shared' && o.what === what);
+    const sh = { what, steel: true, castIn: true, edges: 0, s: Infinity, c: [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2], B: box[2] - box[0], D: box[3] - box[1], anchors: prev?.anchors, match: (t) => [...G, ...riders].some(f => f.match(t)) };
+    Object.assign(sh, { plate: [sh.B, sh.D], Bs: () => sh.B + raft, Ds: () => sh.D + raft, grow: () => {} });
+    for (const f of G) Object.assign(f, { hidden: true, big: false });
+    for (const f of riders) f.over = what;
+    out.push({ kind: 'shared', ...settle(sh), riders: riders.map(f => f.what) });
+  }
+  const below = out.filter(f => (f.kind === 'pedestal' && f.steel || f.kind === 'shared') && !f.hidden);
+  for (const f of below) if (below.some(o => o !== f && hit(o, f))) f.big = true;
+  // the wall columns, wall by wall in order along it. A column whose grillage would have to reach further in than
+  // GRILLAGE_MAX shares one with the lighter of its neighbours instead (a combined footing): one grillage under the two,
+  // as long along the wall as both of theirs, its middle between them.
   for (const w of ['shell back', 'shell front', 'shell left', 'shell right']) {
     const ax = w.endsWith('back') || w.endsWith('front') ? 0 : 2, list = loads.filter(t => t.from === w).sort((a, b) => a.p[ax] - b.p[ax]);
-    const end = ax === 0 ? ox : oz, out = ax === 0 ? 2 : 0, face = Math.sign(list[0]?.p[out] || 1) * (ax === 0 ? oz : ox);
-    list.forEach((t, i) => {
-      const gaps = [i ? t.p[ax] - list[i - 1].p[ax] : Infinity, i < list.length - 1 ? list[i + 1].p[ax] - t.p[ax] : Infinity], s = Math.min(...gaps);
-      const corner = end - Math.abs(t.p[ax]) < 2, B = Math.min(9.4, s - 0.6);
-      // (a corner column's grillage runs from the corner along its wall; the others are centred on their columns)
-      const c = corner ? Math.sign(t.p[ax]) * (end - B / 2) : t.p[ax];
-      cols.push({ t, wall: w, ax, out, face, s, B, c, corner });
+    const end = ax === 0 ? ox : oz, gapAt = (i) => [i ? list[i].p[ax] - list[i - 1].p[ax] : Infinity, i < list.length - 1 ? list[i + 1].p[ax] - list[i].p[ax] : Infinity];
+    const make = (idx, prev) => {
+      const ts = idx.map(i => list[i]), t = ts[0], lo = t.p[ax], hi = ts[ts.length - 1].p[ax], s = Math.min(gapAt(idx[0])[0], gapAt(idx[idx.length - 1])[1], ...(idx.length > 1 ? [] : gapAt(idx[0])));
+      const corner = ts.length === 1 && end - Math.abs(lo) < 2, B = hi - lo + Math.min(9.4, s - 0.6), face = Math.sign(t.p[2 - ax] || 1) * (ax === 0 ? oz : ox);
+      const L = corner ? Math.min(s, B + raft / 2) : Math.min(hi - lo + s, B + raft), N = ts.reduce((a, q) => a + q.N, 0), at = corner ? Math.sign(lo) * (end - B / 2) : (lo + hi) / 2;
+      const D = prev ? prev.D : Math.max(WALL_T + 0.4, N / (PED_USE * conc.fc * B), N / (PED_USE * (ROCK - own) * L) - raft / 2);
+      const g = { what: `grillage under ${w.slice(6)} wall column${ts.length > 1 ? 's' : ''} at ${ts.map(q => q.p[ax].toFixed(0)).join(' and ')}`, wall: w, t, ts: ts.length > 1 ? ts : undefined, ax, face, s: hi - lo + s, corner, B, D, L, edges: corner ? 2 : 1, hef: hefOf(0), anchors: prev?.anchors,
+        match: (q) => q.from === w && ts.some(o => near(q.p, o.p)), mc: ts.length > 1 ? (ax === 0 ? [at, t.p[2]] : [t.p[0], at]) : [t.p[0], t.p[2]], castIn: true };
+      const sync = () => { g.c = ax === 0 ? [at, face - Math.sign(face) * g.D / 2] : [face - Math.sign(face) * g.D / 2, at]; g.plate = ax === 0 ? [B, g.D] : [g.D, B]; };
+      sync();
+      g.Bs = () => ax === 0 ? L : g.D + raft / 2; g.Ds = () => ax === 0 ? g.D + raft / 2 : L;
+      g.grow = (k) => { g.D = Math.min(2 * GRILLAGE_MAX, g.D * k * k); sync(); };
+      const r = settle(g);
+      return { kind: 'grillage', ...r, c: at, big: r.D > GRILLAGE_MAX };
+    };
+    if (drawn) {
+      list.forEach((t, i) => {
+        const prev = drawn.grillages.find(g => g.wall === w && (g.ts || [g.t]).some(o => near(o.p, t.p)));
+        if (!prev?.ts) out.push(make([i], prev)); else if (near(prev.ts[0].p, t.p)) out.push(make(prev.ts.map(o => list.findIndex(q => near(q.p, o.p))), prev));
+      });
+      continue;
+    }
+    const one = list.map((t, i) => make([i], null)), partner = new Map();
+    one.forEach((g, i) => {
+      if (!g.big || g.corner || partner.has(i)) return;
+      const j = [i - 1, i + 1].filter(j => j >= 0 && j < list.length && !partner.has(j) && !one[j].corner).sort((a, b) => list[a].N - list[b].N)[0];
+      if (j !== undefined) { partner.set(i, j); partner.set(j, i); }
     });
+    one.forEach((g, i) => { if (!partner.has(i)) out.push(g); else if (i < partner.get(i)) out.push(make([i, partner.get(i)], null)); });
   }
+  // everything else on the ground: the columns of what stands outside the raft (each on a grillage in its footing's
+  // top, with its share of the footing to spread its load on the rock), the trestles, the upright shafts
+  for (const lt of loads.filter(t => !t.from.startsWith('tower') && !t.from.startsWith('shell'))) {
+    const o = OUT_FOOT[lt.from], prev = drawn && drawn.others.find(q => q.t.from === lt.from && near(q.t.p, lt.p));
+    const B0 = prev ? prev.B : o ? Math.max(2.0, Math.sqrt(lt.N / (PED_USE * conc.fc))) : lt.from.startsWith('upright') ? UPRIGHT_PAD : 1.6;
+    const g = { what: o ? `a column of the ${lt.from} on its footing` : `pad under ${lt.from}`, t: lt, outside: !!o, from: lt.from, B: B0, D: B0, c: [lt.p[0], lt.p[2]], edges: 0, s: Infinity, hef: hefOf(o ? 0 : PAD), anchors: prev?.anchors,
+      match: (q) => q.from === lt.from && near(q.p, lt.p) };
+    g.plate = [B0, B0]; g.Bs = () => o ? Math.sqrt(o.area / o.n) : g.B + raft; g.Ds = g.Bs;
+    g.grow = (k) => { if (lt.from.startsWith('upright')) return; g.B *= k; g.D = g.B; g.plate = [g.B, g.B]; };
+    out.push({ kind: 'other', ...settle(g) });
+  }
+  return out;
+}
+function designFoundations(res) {
   const trial = (raft) => {
-    const own = raft * conc.rho * GRAVITY, net = ROCK - own;
-    const g = cols.map(o => {
-      // as deep into the hall as the concrete under it and the rock under the raft need
-      const L = o.corner ? Math.min(o.s, o.B + raft / 2) : Math.min(o.s, o.B + raft);
-      const D = Math.max(WALL_T + 0.4, o.t.N / (PED_USE * conc.fc * o.B), o.t.N / (PED_USE * net * L) - raft / 2), spread = L * (D + raft / 2);
-      return { ...o, D, spread, bearing: o.t.N / (o.B * D), rock: o.t.N / spread + own, punch: punching(o.t.N, o.B, D, raft, spread, o.corner ? 2 : 1, o.s), big: D > GRILLAGE_MAX };
-    });
-    const p = peds.map(q => { const spread = (q.B + raft) * (q.D + raft); return { ...q, spread, bearing: q.N / (q.B * q.D), rock: q.N / spread + own, punch: punching(q.N, q.B, q.D, raft, spread) }; });
-    const others = loads.filter(t => !t.from.startsWith('tower') && !t.from.startsWith('shell')).map(t => {
-      // (a column outside the raft stands on a grillage at the top of its footing, as big as the concrete under it
-      // needs, and has its share of the footing's area to spread its load on the rock)
-      const o = OUT_FOOT[t.from], B = o ? Math.max(2.0, Math.sqrt(t.N / (PED_USE * conc.fc))) : t.from.startsWith('upright') ? UPRIGHT_PAD : 1.6, spread = o ? o.area / o.n : (B + raft) ** 2;
-      return { t, outside: !!o, B, D: B, spread, bearing: t.N / (B * B), rock: t.N / spread + own, punch: punching(t.N, B, B, raft, spread) };
-    });
-    const all = [...g, ...p, ...others];
-    // (designed with a little in hand, as the pedestals are: the check is against the exact analysis's loads)
-    return { raft, own, grillages: g, peds: p, others, ok: all.every(f => f.punch <= 0.95 && f.rock <= ROCK && f.bearing <= conc.fc && !f.big && !f.capped) };
+    const all = footings(res, raft);
+    return { raft, all, peds: all.filter(f => f.kind === 'pedestal'), grillages: all.filter(f => f.kind === 'grillage'), others: all.filter(f => f.kind === 'other'), shared: all.filter(f => f.kind === 'shared'),
+      ok: all.filter(f => !f.hidden).every(f => f.punch <= 0.95 && f.rock <= ROCK && f.bearing <= MATERIAL.concrete.fc && !f.big && !f.capped && !f.short && f.slide <= 1 && f.lift.pull <= f.lift.holds) };
   };
   foundation = RAFTS.map(trial).find(f => f.ok) || trial(RAFTS[RAFTS.length - 1]);
   return foundation;
+}
+// The raft as a plate on the rock (Hetenyi's beam on an elastic foundation): under the heaviest foot, a strip as wide as
+// the foot's spread bends with M = P / (4 beta), beta = (k b / 4 E I)^(1/4), k the rock's modulus of subgrade reaction
+// (E / (B (1 - nu^2))); against a strip reinforced 0.5 % top and bottom (fyd 435 MPa, z 0.9 d) at 1.4 times.
+function raftBending(F) {
+  const conc = MATERIAL.concrete, t = F.raft, d = t - 0.3;
+  return F.all.filter(f => !f.hidden && (f.kind !== 'other' || !f.outside)).map(f => {
+    const b = Math.max(f.Bs(), f.Ds()), ks = GROUND.E / (b * (1 - GROUND.nu ** 2)), EI = conc.E * b * t ** 3 / 12, beta = Math.pow(ks * b / (4 * EI), 0.25);
+    const M = f.N / (4 * beta), Mrd = 0.005 * b * d * 435e6 * 0.9 * d;
+    return { what: f.what, M, Mrd, u: 1.4 * M / Mrd, len: Math.PI / beta };
+  }).reduce((m, r) => r.u > m.u ? r : m, { u: 0 });
 }
 
 function draw() {
   const out = [];
   G.tag = 'structure';
+  damperParts = [];
   declare(out);
   solids = []; bearings = [];
   for (const m of out) {
+    if (m.hanger) continue;
     if (SOLID.has(m.label) || m.label.startsWith('leg')) solids.push({ collider: sbeam('iron', m.a, m.b, m.h, m.w), what: m.label, at: m.a.map((v, i) => (v + m.b[i]) / 2), owner: m.owner, joins: m.joins });
     else beam('iron', m.a, m.b, m.h, m.w);
   }
   for (const T of towers) {
     const hl = Math.min(2.4, ...T.legs.map(m => legSection(T, m).dims.h)), { a, r } = T;
-    for (const m of [...T.ties, ...T.braces]) for (const p of m) ibox('iron', hl * 1.5, hl * 1.5, DEPTH + 0.08, p[0], p[1], p[2]);     // gusset plates at the joints
+    for (const m of [...T.ties, ...T.braces]) for (const p of m.slice(0, 2)) ibox('iron', hl * 1.5, hl * 1.5, Math.max(DEPTH, m[3] || 0) + 0.08, p[0], p[1], p[2]);     // gusset plates at the joints
     for (const z of T.planes) {
-      ibox('iron', 2 * r + 3.2, 0.5, DEPTH, a.x, T.yh - 0.1, z);                                                // head casting the two legs meet under
+      if (!(T.head && z === T.headZ)) ibox('iron', 2 * r + 3.2, 0.5, DEPTH, a.x, T.yh - 0.1, z);                   // head casting the two legs meet under (where they meet)
       // pillow block: iron housing, bronze bearing shell
       G.tag = 'bearing';
       bearings.push(sbox('iron', r * 2 + 2.4, 0.5, 0.9, a.x, a.y - r - 0.45, z), sbox('iron', r * 2 + 1.2, r * 2 + 0.7, 0.9, a.x, a.y - 0.1, z));       // (no thicker than the frame: wheels' hubs come close on both sides)
       if (!SHAFT[T.arbor].beam) icyl('bronze', r + 0.3, 0.96, a.x, a.y, z, { x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 });       // (the pendulum's head beam sits in a saddle, not a bearing)
-      for (const dx of [-(r + 0.9), r + 0.9]) icyl('steel', 0.2, 0.5, a.x + dx, a.y - r - 0.1, z);
+      // the seat: the housing's feet stand on packs of steel shims SHIM thick on the base, bolted down through them, with
+      // a jacking screw beside each foot to lift the housing while its pack is changed (see PRESET_DOUBT)
+      const sw = seatW(T.loads[T.planes.indexOf(z)] ?? Math.max(...T.loads));
+      for (const sx of [-1, 1]) {
+        const x = a.x + sx * (r + 0.65 + sw / 2), yb = a.y - r - 0.2;
+        ibox('steel', sw, SHIM, 0.8, x, yb + SHIM / 2, z); ibox('iron', sw + 0.05, 0.25, 0.85, x, yb + SHIM + 0.125, z);
+        icyl('steel', 0.1, SHIM + 0.6, x, yb + SHIM / 2 + 0.1, z); icyl('steel', 0.06, SHIM + 0.5, x + sx * (sw / 2 + 0.08), yb + (SHIM + 0.5) / 2, z);
+      }
       G.tag = 'structure';
     }
   }
   // Each leg stands on a pedestal no bigger than its own foot needs. The foundation proper is
   // under the floor: one raft beneath the whole building (checked in structuralCheck).
   const F = designFoundations(lastResult);
-  for (const g of F.peds) {
-    solids.push({ collider: sbox('stone', g.B, FOOT, g.D, g.c[0], FOOT / 2, g.c[1]), what: 'pedestal', at: [g.c[0], FOOT / 2, g.c[1]], owner: g.towers[0], joins: g.towers });
-    // a foot's bearing plate, held down by four bolts; feet that share a pedestal stand on one grillage, a plate as big
-    // as the block, which spreads them both over it
-    for (const { f, B: dx, D: dz } of g.ps.length > 1 ? [{ f: { p: [g.c[0], 0, g.c[1]] }, B: g.B, D: g.D }] : g.ps) {
-      ibox('iron', dx - 0.4, 0.08, dz - 0.2, f.p[0], FOOT + 0.04, f.p[2]);
-      for (const sx of [-1, 1]) for (const sz of [-1, 1]) iknob('steel', 0.07, f.p[0] + sx * (dx / 2 - 0.35), FOOT + 0.1, f.p[2] + sz * (dz / 2 - 0.2));
+  for (const g of [...F.peds, ...F.shared]) {
+    if (g.kind === 'pedestal') solids.push({ collider: sbox(g.steel ? 'iron' : 'concrete', g.B, FOOT, g.D, g.c[0], FOOT / 2, g.c[1]), what: 'pedestal', at: [g.c[0], FOOT / 2, g.c[1]], owner: g.towers[0], joins: g.towers });
+    if (g.kind === 'pedestal' && g.hidden) { ibox('iron', g.B - 0.4, 0.08, g.D - 0.2, g.c[0], FOOT + 0.04, g.c[1]); continue; }      // (its grillage is the one it shares)
+    // the bearing plate (one for feet that share the pedestal: a grillage that spreads them over it), and round its edge
+    // the anchors, bars through the pedestal into the raft, their nuts on it; under a block of steel, its grillage in the
+    // raft's top, and the anchors round the grillage's edge
+    const [bx, dz] = g.plate, a = g.anchors, hx = 0.4 * bx, hz = 0.4 * dz, per = 4 * (hx + hz), ya = g.steel ? -0.1 : FOOT + 0.1;
+    if (g.kind === 'pedestal') ibox('iron', g.steel ? g.B - 0.4 : bx, 0.08, g.steel ? g.D - 0.2 : dz, g.c[0], FOOT + 0.04, g.c[1]);
+    for (let i = 0; i < a.n; i++) {
+      let u = (i + 0.5) / a.n * per;
+      const pt = u < 2 * hx ? [-hx + u, -hz] : (u -= 2 * hx) < 2 * hz ? [hx, -hz + u] : (u -= 2 * hz) < 2 * hx ? [hx - u, hz] : [-hx, hz - (u - 2 * hx)];
+      iknob('steel', Math.max(0.05, 0.9 * a.d), g.c[0] + pt[0], ya, g.c[1] + pt[1]);
+    }
+    if (g.steel) for (const [k, y] of [[0, -0.3], [1, -0.8]]) for (let i = 0, n = Math.max(2, Math.round((k ? dz : bx) / 1.2)); i < n; i++) {
+      const u = ((i + 0.5) / n - 0.5) * (k ? dz : bx);
+      if (k) ibox('iron', bx, 0.5, 0.6, g.c[0], y, g.c[1] + u); else ibox('iron', 0.6, 0.5, dz, g.c[0] + u, y, g.c[1]);
     }
   }
   // the wall columns' grillages, cast into the top of the raft under the floor (two layers of steel beams crossing), and
@@ -1582,12 +2280,14 @@ function draw() {
     }
     for (const p of wind.head) { ibox('iron', 1.0, 1.25, 0.5, p[0], p[1] - 0.12, p[2]); ibox('bronze', 0.84, 0.16, 0.4, p[0], p[1], p[2]); }
     G.tag = 'structure';
-    for (const f of [...wind.trestles.flatMap(t => t.feet), ...wind.tips.flatMap(j => j.posts)]) { ibox('stone', 1.1, PAD, 1.1, f[0], PAD / 2, f[2]); ibox('iron', 0.8, 0.06, 0.8, f[0], PAD + 0.03, f[2]); }
+    // (each foot's base plate as big as the foundations' check made it, on a plinth of concrete as it is checked)
+    const plateOf = (f) => F.others.find(o => !o.outside && o.from === 'winding gear' && Math.hypot(o.t.p[0] - f[0], o.t.p[2] - f[2]) < 0.3)?.B ?? 1.6;
+    for (const f of [...wind.trestles.flatMap(t => t.feet), ...wind.tips.flatMap(j => j.posts)]) { const B = plateOf(f); ibox('concrete', B + 0.3, PAD, B + 0.3, f[0], PAD / 2, f[2]); ibox('iron', B, 0.06, B, f[0], PAD + 0.03, f[2]); }
     // each upright shaft's pedestal, and on it the casting with its footstep and neck bearing (the right-hand one held
     // down to the raft by eight rods); a collar where each steady holds it; and the yoke's bearing housings either side
     // of the worm, each a casting round its bronze bush on the end of an arm
     for (const u of W.uprights) {
-      solids.push({ collider: sbox('stone', UPRIGHT_PAD, 0.5, UPRIGHT_PAD, u.x, 0.25, W.wz), what: 'pedestal', at: [u.x, 0, W.wz] });
+      solids.push({ collider: sbox('concrete', UPRIGHT_PAD, 0.5, UPRIGHT_PAD, u.x, 0.25, W.wz), what: 'pedestal', at: [u.x, 0, W.wz] });
       if (u.side > 0) for (let i = 0; i < ANCHOR.n; i++) { const a = (i + 0.5) * 2 * Math.PI / ANCHOR.n; iknob('steel', 0.1, u.x + Math.cos(a) * ANCHOR.D / 2, 0.85, W.wz + Math.sin(a) * ANCHOR.D / 2); }
       G.tag = 'bearing';
       icyl('iron', W.upR + 0.35, 2.7, u.x, 0.5 + 1.35, W.wz); icyl('iron', ANCHOR.D / 2 + 0.2, 0.3, u.x, 0.65, W.wz);
@@ -1607,11 +2307,111 @@ function draw() {
     for (let k = 0; k < n; k++) { const a = (k + 0.5) * 2 * Math.PI / n; _q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), a); ibox('iron', F.boss - ri, 2 * Math.PI * F.boss / n + 0.05, F.depth, DIAL.x + Math.cos(a) * rm, DIAL.y + Math.sin(a) * rm, F.z, _q.clone()); }
     G.tag = 'structure';
   }
-  for (const h of hung) {
-    tube('tendon', [h.x, h.e.y, h.e.z], [h.x, ROOF.at(h.x) + 0.4, h.e.z], 0.03);
-    iknob('steel', 0.07, h.x, h.e.y, h.e.z); ibox('iron', 0.1, 0.5, 0.1, h.x, h.e.y + 1.9, h.e.z);
+  // the laminations: a plate thicker than S690 is rolled is built of plies (plies(), structure/model.js), stitched with
+  // preloaded bolts in rows STITCH.pitch apart. On every laminated member, the seams between the plies of its flanges
+  // where they show on its sides, and its rows of stitches along its flanges and webs.
+  const seam = new THREE.Vector3(), ey = new THREE.Vector3(), ez = new THREE.Vector3(), Q = new THREE.Quaternion(), E = new THREE.Euler();
+  let laminated = 0;
+  for (const m of out) {
+    if (!m.sec || !m.sec.plates) continue;
+    const g = plies(m.sec, ALLOY); if (!g.laminated) continue;
+    const d = m.b.map((v, i) => v - m.a[i]), hl = Math.hypot(d[0], d[2]), L = Math.hypot(hl, d[1]);
+    Q.setFromEuler(E.set(0, Math.atan2(-d[2], d[0]), Math.atan2(d[1], hl), 'YZX')); ey.set(0, 1, 0).applyQuaternion(Q); ez.set(0, 0, 1).applyQuaternion(Q);
+    const at = (oy, oz) => seam.set((m.a[0] + m.b[0]) / 2, (m.a[1] + m.b[1]) / 2, (m.a[2] + m.b[2]) / 2).addScaledVector(ey, oy).addScaledVector(ez, oz);
+    const h = m.h, w = m.w;
+    for (const sz of [-1, 1]) for (const sy of [-1, 1]) for (let k = 1; k < g.n; k++) { at(sy * (h / 2 - k * g.ply), sz * (w / 2 + 0.004)); ipart('slab', 'rail', L - 0.1, 0.012, 0.012, seam.x, seam.y, seam.z, Q); }
+    for (const sy of [-1, 1]) for (let u = -w / 2 + STITCH.pitch / 2; u < w / 2; u += STITCH.pitch) { at(sy * (h / 2 + 0.006), u); ipart('slab', 'rivet', L - 0.2, 0.03, 0.06, seam.x, seam.y, seam.z, Q); }
+    for (const sz of [-1, 1]) for (let u = -h / 2 + STITCH.pitch / 2; u < h / 2; u += STITCH.pitch) { at(u, sz * (w / 2 + 0.006)); ipart('slab', 'rivet', L - 0.2, 0.06, 0.03, seam.x, seam.y, seam.z, Q); }
+    laminated++;
+  }
+  timing.laminated = laminated;
+  // the hangers: steel bars, forked at both ends onto a pin through a gusset, with a turnbuckle to set their length
+  for (const m of out.filter(m => m.hanger)) {
+    const r = m.r, fork = 2.4 * r + 0.06, d = m.b.map((v, i) => v - m.a[i]), L = Math.hypot(...d), on = (p, t) => p.map((v, i) => v + d[i] / L * t);       // (a raked one's forks and turnbuckle on its line)
+    tube('steel', m.a, m.b, r);
+    for (const [p, dy] of [[m.a, 0.22], [m.b, -0.22]]) { const q = on(p, dy), c = on(p, dy * 0.6); ibox('steel', fork, 0.36, fork, q[0], q[1], q[2]); icyl('steel', 0.8 * r + 0.015, fork + 0.02, c[0], c[1], c[2], { x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 }); }
+    { const t = on(m.a, 1.9); ibox('steel', 2 * r + 0.05, 0.6, 2 * r + 0.05, t[0], t[1], t[2]); }
+  }
+  // the dampers' rods and dashpots (their posts, yokes, arms and blocks are solids, above), too small to throw a shadow
+  // worth drawing
+  for (const g of damperParts) {
+    if (g.tower) {
+      // a stair tower's: the four rods from the cross to the block's top, an eye and a pin at each end; the four dashpots,
+      // a cylinder and its rod, each from a lug on a rail to one on the block's face
+      const Z = { x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 }, X1 = { x: 0, y: 0, z: Math.SQRT1_2, w: Math.SQRT1_2 }, yT = g.hy - 0.25, yB = g.yb + g.high / 2;
+      for (const [x, z] of [[g.cx - g.a, g.cz], [g.cx + g.a, g.cz], [g.cx, g.cz - g.a], [g.cx, g.cz + g.a]]) {
+        ipart('pin', 'steel', SPIRE.rod, yT - yB, SPIRE.rod, x, (yT + yB) / 2, z);
+        for (const y of [yT + 0.1, yB + 0.12]) ipart('slab', 'steel', 0.16, 0.24, 0.16, x, y, z);
+      }
+      for (const [ux, uz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const r0 = g.side / 2, r1 = SPIRE.P - 0.15, m = (r0 + r1) / 2, L = r1 - r0, x = g.cx + ux * m, z = g.cz + uz * m, q = ux ? X1 : Z;
+        ipart('pin', 'steel', 0.09, L * 0.55, 0.09, g.cx + ux * (r1 - L * 0.275), g.yb, g.cz + uz * (r1 - L * 0.275), q);
+        ipart('pin', 'steel', 0.035, L * 0.6, 0.035, g.cx + ux * (r0 + L * 0.3), g.yb, g.cz + uz * (r0 + L * 0.3), q);
+        for (const r of [r0 + 0.06, r1 + 0.02]) ipart('slab', 'steel', ux ? 0.12 : 0.3, 0.3, uz ? 0.12 : 0.3, g.cx + ux * r, g.yb, g.cz + uz * r);
+        void x; void z;
+      }
+      continue;
+    }
+    const yT = g.top - 0.25, yB = g.yb + g.by / 2, Z = { x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 };
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const x = g.x + sx * (g.bx / 2 - 0.1), z = g.zc + sz * (g.bz / 2 - 0.06); ipart('pin', 'steel', 0.02, yT - yB, 0.02, x, (yT + yB) / 2, z); }
+    for (const sz of [-1, 1]) { const z0 = g.zc + sz * g.bz / 2, z1 = g.zc + sz * (g.arm - 0.06); ipart('pin', 'steel', 0.07, Math.abs(z1 - z0), 0.07, g.x, g.yb, (z0 + z1) / 2, Z); ipart('pin', 'steel', 0.03, Math.abs(z1 - z0) + 0.1, 0.03, g.x, g.yb, (z0 + z1) / 2, Z); }
+  }
+  // the connectors of the braces no one else draws (a tie from a stair tower's column to the wall's): as checked
+  const tied = new Set();
+  for (const A of allAssemblies()) for (const b of A.braces) {
+    if (b.drawn || !b.at) continue;
+    const p = A.nodes[b.n].p, sec = b.section || BRACE_SECTION(), k = `${p.join()}|${b.at.join()}`;
+    if (tied.has(k)) continue;                       // (one connector holds a point both ways)
+    tied.add(k);
+    if (Math.hypot(p[0] - b.at[0], p[1] - b.at[1], p[2] - b.at[2]) > 1) beam('iron', p, b.at, sec.dims.h, sec.dims.b);
   }
   G.tag = '';
+}
+
+// Vortex shedding on the slender stacks (EN 1991-1-4 Annex E): each stack's first sideways mode (its own mass, the frame
+// it is tied into), the speed at which its vortices shed in step with it (St 0.12 square, 0.18 round) against the mean
+// wind at its head (terrain II, vb 25 m/s); where that may be reached (E.1.3.1), the amplitude by E.1.5.2 (K 0.13,
+// Kw at most 0.6 over the height above its last tie, clat 1.1 square and 0.3 round at its Reynolds number, less as the
+// critical speed nears 1.25 times the mean (Table E.3), damping
+// 0.07 for a frame in brick), and the inertia it sways with against the wind it is designed for at its head.
+// Each such stack says what it is where it declares itself (A.slender: { b across, square or round, top, tied: the
+// height of its last tie to anything, 0 for one that stands free }).
+// A stack with a damper (A.slender.damper, the most it may weigh: SPIRE) has its damping raised by it (EN 1991-1-4 F.5,
+// delta_d, for a damping device): the block (kg, tuned to hz, its dashpots zeta) on the stack's mode without it (f, its
+// modal mass M, the head's movement on that mode's scale phi), as Den Hartog has the pair, pushed steadily at every
+// frequency near its own: the most the stack then moves, against what it would under the same push standing still, is as
+// if its damping ratio were half the inverse of that; and its decrement is 2 pi times that.
+function tunedDecrement(f, M, phi, kg, hz, zeta) {
+  if (!(kg > 0) || !(M > 0) || !(hz > 0)) return 0;
+  const mu = kg * phi * phi / M, fr = hz / f, f2 = fr * fr;
+  let peak = 0;
+  for (let g = 0.5; g <= 1.5; g += 0.0005) {
+    const g2 = g * g, a = 2 * zeta * fr * g, num = a * a + (g2 - f2) ** 2, den = a * a * (g2 - 1 + mu * g2) ** 2 + (mu * f2 * g2 - (g2 - 1) * (g2 - f2)) ** 2;
+    peak = Math.max(peak, Math.sqrt(num / den));
+  }
+  return Math.PI / peak;
+}
+// Den Hartog's tuning of a stack's damper of kg on its mode (m): its frequency and its dashpots' damping ratio
+const stackTuning = (m, kg) => { const mu = kg * (m.lateralTop ?? 1) ** 2 / m.lateralMass; return { hz: m.lateral / (1 + mu), zeta: Math.sqrt(3 * mu / (8 * (1 + mu) ** 3)), mu }; };
+const VORTEX_DELTA = 0.07;                           // (the frame's own damping, as a logarithmic decrement: a steel frame in brick)
+function vortexOf(name, S, m, dd = 0) {
+  const St = S.square ? 0.12 : 0.18, vcrit = m.lateral * S.b / St, vm = 0.19 * Math.log(S.top / 0.05) * 25, check = vcrit < 1.25 * vm;
+  const delta = VORTEX_DELTA + dd, me = m.mass / S.top, Sc = 2 * delta * me / (1.25 * S.b * S.b), free = Math.max(S.b, S.top - S.tied), r = 6 / (free / S.b);
+  const ratio = vcrit / vm, clat = (S.square ? 1.1 : 0.3) * (ratio <= 0.83 ? 1 : ratio < 1.25 ? 3 - 2.4 * ratio : 0);         // (Table E.3)
+  const Kw = Math.min(0.6, 3 * r * (1 - r + r * r / 3)), y = check ? S.b / (St * St) / Sc * 0.13 * Kw * clat : 0;
+  const Fw = me * (2 * Math.PI * m.lateral) ** 2 * y, Fd = (S.square ? 1.4 : 1.2) * windAt(S.top) * S.b;
+  return { name, f: m.lateral, b: S.b, vcrit, vm, check, Sc, delta, dd, y, Fw, Fd, ok: Fw <= Fd };
+}
+function vortex(res) {
+  const out = [];
+  for (const F of res.frames.values()) for (const [name, m] of Object.entries(F.modes || {})) {
+    const S = getAssembly(name)?.slender; if (!S || typeof S !== 'object' || m.vertical !== undefined) continue;
+    const kg = S.damper ? sizes.get(`${name}|damper`) || 0 : 0, hz = sizes.get(`${name}|damper hz`) || 0, zeta = sizes.get(`${name}|damper zeta`) || 0;
+    const v = vortexOf(name, S, m, kg > 0 ? tunedDecrement(m.lateral, m.lateralMass, m.lateralTop ?? 1, kg, hz, zeta) : 0);
+    if (kg > 0) Object.assign(v, { kg, hz, zeta, Lp: GRAVITY / (2 * Math.PI * hz) ** 2, mu: kg * (m.lateralTop ?? 1) ** 2 / m.lateralMass });
+    out.push(v);
+  }
+  return out;
 }
 
 // Runs the structural model over everything declared so far and adds the checks that are
@@ -1788,6 +2588,12 @@ export function structuralCheck() {
       const hit = swept(box);
       if (hit) clashes.push(`the maintaining detent's ${what} stands in the path of something carried round on the great arbor (${hit.r.toFixed(2)} m out, at z ${hit.z.toFixed(2)}), which will strike it once a turn`);
     }
+    // (and so is the head of the frame it stands in: its head beam, raking struts and the legs up to them)
+    const Tg = towers.find(t => t.arbor === 'great');
+    for (const q of solids.filter(q => q.owner === Tg?.name && (q.what === 'head beam' || q.what === 'head brace' || (q.what.startsWith('leg') && Tg.head && Math.abs(q.at[2] - Tg.headZ) < 0.01 && q.at[1] > Tg.kink)))) {
+      const hit = swept(boxOf(q.collider));
+      if (hit) clashes.push(`the great tower's ${q.what} stands in the path of something carried round on the great arbor (${hit.r.toFixed(2)} m out, at z ${hit.z.toFixed(2)}), which will strike it once a turn`);
+    }
   }
   // ... and the spaces that must be empty: nothing drawn, and no collider, may stand in a doorway or in the headroom over a walkway
   const anything = boxIndex(DRAWN.filter(o => o.tag !== 'outside').map(o => obb(o.c, axesOf(o.q), o.half)));
@@ -1854,41 +2660,91 @@ export function structuralCheck() {
   const frames = [...res.frames.values()].filter(F => isFinite(F.lambda)).sort((p, q) => p.lambda - q.lambda);
   const weak = frames.filter(F => F.lambda < BUCKLING_FACTOR || F.exact === false);
   extra.push({ name: 'stability: each frame', ok: !weak.length,
-    verdict: `${frames.length} frames; the least stable ${frames.slice(0, 4).map(F => `${F.name} ${F.lambda.toFixed(2)}`).join(', ')} times their loads before they buckle (each needs ${BUCKLING_FACTOR}; confirmed by factorising K + ${BUCKLING_FACTOR} Kg)${weak.length ? `; too low: ${weak.map(F => F.name).join(', ')}` : ''}` });
+    verdict: `${frames.length} frames (what leans on a frame, braced to it, is solved with it); the least stable ${frames.slice(0, 4).map(F => `${F.name} ${F.lambda.toFixed(2)}`).join(', ')} times their working loads before they buckle, with every member's axial force at its worst in any combination (each needs ${BUCKLING_FACTOR}, confirmed by factorising K + ${BUCKLING_FACTOR} Kg). Every member is checked with the forces of the direct analysis (AISC 360-16 C: ${DAM.load} times the loads on ${DAM.stiff} of the stiffness, notional loads of 1/${Math.round(1 / PHI)} of the weight in every combination, divided back by ${DAM.load}), solved to second order outright where a frame would buckle under less than 9 times its working loads, so that each member is amplified as much as the frame's modes bend it, and amplified by B2 (Appendix 8, then at most 1.29) otherwise${weak.length ? `; too low: ${weak.map(F => F.name).join(', ')}` : ''}` });
+  // The braces: each must carry 2 % of the push in what it braces and be stiff enough to brace it (AISC App. 6.2)
+  const braces = [...res.frames.values()].flatMap(F => F.braces || []), wbr = braces.reduce((m, b) => b.u > m.u ? b : m, { u: 0 });
+  extra.push({ name: 'braces: force and stiffness', ok: wbr.u <= 1,
+    verdict: `${braces.length} braces and ties from frame to frame, each a connector as stiff as its section over its length, carrying what the analysis gives it and at least 2 % of the push in the member it holds, and stiffer than 2 x 8 Pr / Lb (AISC 360-16 App. 6.2.2, nodal, ASD): the worst ${wbr.from ? `from ${wbr.from} to ${wbr.on}, ${(wbr.u * 100).toFixed(0)}% (${(Math.max(wbr.need, 0) / 1e3).toFixed(0)} kN against ${(wbr.cap / 1e3).toFixed(0)} kN${wbr.k ? `, stiffness ${(wbr.beta / 1e6).toFixed(1)} of ${(wbr.k / 1e6).toFixed(0)} MN/m` : ''})` : 'none'}` });
+  // The crossings under people walking, and the slender stacks in the wind
+  const decks = [...res.frames.values()].flatMap(F => Object.entries(F.modes || {}).filter(([, m]) => m.vertical !== undefined));
+  const sway = decks.map(([n, m]) => { const d = swayOf(n, m), N = lockIn(d); return [n, m, d, N, !inBand(m) || N >= d.crowd]; });
+  const bounce = sway.filter(([, m, , , ok]) => m.vertical < VERT_HZ || !ok);
+  const damped = ([n, m, d, N]) => !inBand(m) ? '' : `, in the band: ${d.kg ? `a damper of ${(d.kg / 1e3).toFixed(1)} t tuned to ${d.hz.toFixed(2)} Hz (a pendulum ${(GRAVITY / (2 * Math.PI * d.hz) ** 2).toFixed(2)} m long, its dashpots ${(d.zeta * 100).toFixed(1)} % of critical) at x ${d.dm.x.toFixed(1)}, where the mode moves ${(d.phi * 100).toFixed(0)} % of its most` : d.dm ? 'no damper' : 'no room under it for a damper'}; ${Math.round(d.crowd)} people on it lock in at ${Math.round(N)}`;
+  extra.push({ name: 'crossings: people walking', ok: !bounce.length,
+    verdict: `their first modes (the deck's own weight, plan braced, hung on its bars): ${sway.map(e => `${e[0].slice(5)} ${e[1].vertical.toFixed(1)} Hz up and down, ${e[1].lateral.toFixed(2)} Hz sideways${damped(e)}`).join('; ')}. Up and down above ${VERT_HZ} Hz, out of the band walking excites (Setra 2006, range 3 or 4). Sideways, a crowd may lock in to a deck's sway between ${LAT_HZ[0]} and ${LAT_HZ[1]} Hz, each person pushing it as a negative damping of ${DALLARD_K} Ns/m (Dallard et al. 2001): a deck in that band must not lock in under ${CROWD} person a square metre (Setra class I, ${PERSON} kg each, their weight on it), its own damping ${(DECK_ZETA * 100).toFixed(1)} % of critical and its damper's (Den Hartog's tuning; the pair's stability by Routh-Hurwitz)${bounce.length ? `; too lively: ${bounce.map(([n]) => n).join(', ')}` : ''}` });
+  // The line shafts: how far each span sags between its bearings under its own weight and its wheels' (the shaft as its
+  // own frame on its bearings, which hand its weight to the trestles), no more than 1/SAG of it; an end beyond its last
+  // bearing no more than 1/SAG of twice its length. (Their bending while they turn is in their rows.)
+  const shafts = allAssemblies().filter(A => A.shaft).map(A => {
+    const F = frameOf(res, A.name), { sup, A1, d, len } = A.shaft, u = F?.cases?.dead; let worst = { r: 0 };
+    if (!F || !u || !sup.length) return { name: A.name, ok: false, worst, sup };
+    const along = (p) => (p[0] - A1[0]) * d[0] + (p[2] - A1[2]) * d[2];
+    const spans = [[0, sup[0], 2], ...sup.slice(1).map((b, i) => [sup[i], b, 1]), [sup[sup.length - 1], len, 2]];
+    for (const [a, b, k] of spans) {
+      if (b - a < 0.5) continue;
+      for (let n = 0; n < F.nodes.length; n++) { const t = along(F.nodes[n].p); if (t <= a + 0.01 || t >= b - 0.01 || Math.abs(F.nodes[n].p[1] - A1[1]) > 0.01) continue; const sag = Math.abs(u[6 * n + 1]), r = sag / (k * (b - a) / SAG); if (r > worst.r) worst = { r, sag, a, b, end: k === 2 }; }
+    }
+    return { name: A.name, ok: worst.r <= 1, worst, sup };
+  });
+  const sagged = shafts.filter(s => !s.ok);
+  extra.push({ name: 'line shafts: their spans', ok: !sagged.length,
+    verdict: `each line shaft on its own bearings, sagging between them under its weight and its wheels' no more than 1/${SAG} of the span (0.01 inch to the foot, the rule for line shafting), an end beyond its last bearing no more than 1/${SAG} of twice its length: ${shafts.map(s => `${s.name}, ${s.sup.length} bearings, the longest span ${Math.max(...s.sup.slice(1).map((b, i) => b - s.sup[i]), 0).toFixed(1)} m, at worst ${(s.worst.r * 100).toFixed(0)}% (${((s.worst.sag || 0) * 1000).toFixed(1)} mm ${s.worst.end ? 'at an end' : 'in a span'} of ${((s.worst.b ?? 0) - (s.worst.a ?? 0)).toFixed(1)} m)`).join('; ')}${sagged.length ? `; too long: ${sagged.map(s => s.name).join(', ')}` : ''}` });
+  const stacks = vortex(res), shaken = stacks.filter(v => !v.ok);
+  extra.push({ name: 'slender stacks: vortex shedding', ok: !shaken.length,
+    verdict: stacks.map(v => `${v.name}: ${v.f.toFixed(2)} Hz, ${v.b.toFixed(0)} m across, vortices in step at ${v.vcrit.toFixed(0)} m/s against a mean wind of ${v.vm.toFixed(0)} m/s at its head${v.kg ? `, with its damper (a ${(v.kg / 1e3).toFixed(0)} t block hung ${v.Lp.toFixed(2)} m below its rods' pins in the spire's base, tuned to ${v.hz.toFixed(3)} Hz, its dashpots at ${(v.zeta * 100).toFixed(1)} % of critical: ${(v.mu * 100).toFixed(1)} % of the mode's mass, as damping a decrement of ${v.dd.toFixed(2)}, EN 1991-1-4 F.5)` : ''}${v.check ? `, so checked (EN 1991-1-4 E.1.5.2: Scruton ${v.Sc.toFixed(0)}, damping ${v.kg ? `${VORTEX_DELTA} + ${v.dd.toFixed(2)}` : VORTEX_DELTA}): it would sway ${(v.y * 1000).toFixed(0)} mm, its own inertia ${(v.Fw / 1e3).toFixed(0)} kN/m at its head against the ${(v.Fd / 1e3).toFixed(0)} kN/m of wind it is designed for` : ' (more than 1.25 times it: E.1.3.1)'}`).join('; ') + (shaken.length ? `; too much: ${shaken.map(v => v.name).join(', ')}` : '') });
   // Serviceability: the bearings, and the walls.
   const bm = bearingMoves(res), bad = bm.filter(b => b.ratio > 1), mm = (v) => (v * 1000).toFixed(1);
   extra.push({ name: 'serviceability: bearings', ok: !bad.length,
     verdict: `under the pendulum's swing and the winding, the worst bearing moves ${mm(Math.max(...bm.map(b => b.move)))} mm (allowed ${mm(BEARING_MOVE)}), and an arbor's bearings move across it by 1 in ${Math.round(1 / Math.max(...bm.map(b => b.slope), 1e-9)).toLocaleString('en')} of their distance (allowed 1 in ${ARBOR_SLOPE}): ${bm.map(b => `${b.arbor} ${mm(b.move)} mm`).join(', ')}${bad.length ? `; too much at ${bad.map(b => `${b.arbor} (${b.why})`).join(', ')}` : ''}${windingNote()}` });
   const P = presets(res, bm), sag = P.residual.filter(b => b.left > SHIM), off = P.meshes.filter(m => Math.abs(m.preset) > 0.0005);
   extra.push({ name: 'serviceability: bearings under the clock\'s weight', ok: !sag.length && !off.length,
-    verdict: `the bearing seats are pre-set: each is set high and over by what the clock's own weight will move it (${bm.map(b => `${b.arbor} ${mm(b.dead)}`).join(', ')} mm), the wheels landed, and the bearings then lined with shims. Left to the shims is what that computation may be out by, taken as a tenth of it, at most ${mm(Math.max(...P.residual.map(b => b.left)))} mm (${P.residual.map(b => `${b.arbor} ${mm(b.left)}`).join(', ')}) against the ${mm(SHIM)} mm they hold; the weight wound up and run down makes no difference (it hangs on its line either way, and the 2 m it falls between windings is a sixteenth of a turn of the barrel). With the seats pre-set every pair of meshing wheels is at its drawn centre distance under the clock's weight (${P.meshes.map(m => `${m.what} ${mm(m.preset)} mm off, against ${mm(m.bare)} without the preset`).join('; ')}); the shims take up the rest (at most ${mm(Math.max(...P.meshes.map(m => m.doubt)))} mm along a line of centres)${sag.length ? `; too much left to shim at ${sag.map(b => b.tower).join(', ')}` : ''}${off.length ? `; off centre: ${off.map(m => m.what).join(', ')}` : ''}` });
+    verdict: `the bearing seats are pre-set: each is set high and over by what the clock's own weight will move it, its towers settling on the rock with it (${bm.map(b => `${b.arbor} ${mm(b.dead)}`).join(', ')} mm), the wheels landed, and the housings then jacked and their shim packs changed. Left to the shims is what that computation may be out by, taken as a quarter of it, at most ${mm(Math.max(...P.residual.map(b => b.left)))} mm (${P.residual.map(b => `${b.arbor} ${mm(b.left)}`).join(', ')}) against the ${mm(SHIM)} mm packs they stand on; the weight wound up and run down makes no difference (it hangs on its line either way, and the 2 m it falls between windings is a sixteenth of a turn of the barrel). With the seats pre-set every pair of meshing wheels is at its drawn centre distance under the clock's weight (${P.meshes.map(m => `${m.what} ${mm(m.preset)} mm off, against ${mm(m.bare)} without the preset`).join('; ')}); the shims take up the rest (at most ${mm(Math.max(...P.meshes.map(m => m.doubt)))} mm along a line of centres)${sag.length ? `; too much left to shim at ${sag.map(b => b.tower).join(', ')}` : ''}${off.length ? `; off centre: ${off.map(m => m.what).join(', ')}` : ''}` });
   const wm = wallMoves(res), wbad = wm.filter(w => w.ratio > 1);
   extra.push({ name: 'serviceability: the walls in the wind', ok: !wbad.length,
-    verdict: wm.map(w => `${w.wall.slice(6)} ${mm(w.out)} mm out of its plane (allowed ${mm(w.L / WALL_LIMIT)}), its head ${mm(w.along)} mm along it (allowed ${mm(TOWER.H / WALL_LIMIT)})`).join('; ') + (wbad.length ? `; too much: ${wbad.map(w => `${w.wall} (${w.combo})`).join(', ')}` : '') });
-  // Foundations (see designFoundations): the footings as drawn, against the exact analysis's loads. Each load is
-  // matched to its footing by where it is.
-  const conc = MATERIAL.concrete, F = foundation, raft = F.raft, raftP = raft * conc.rho * GRAVITY, area = (2 * (TOWER.hx + TOWER.wall)) * (2 * (TOWER.hz + TOWER.wall));
-  const loads = groundLoads(res);
-  const near = (p, q) => Math.hypot(p[0] - q[0], p[2] - q[2]) < 0.5;
-  const fset = [
-    ...F.peds.map(q => { const N = loads.filter(t => q.ps.some(o => near(o.f.p, t.p))).reduce((a, t) => a + t.N, 0); return { what: `pedestal under ${q.towers.join(' and ')}`, N, B: q.B, D: q.D, spread: q.spread, edges: 0, s: Infinity, capped: q.capped }; }),
-    ...F.grillages.map(g => { const N = loads.filter(t => t.from === g.wall && near(t.p, g.t.p)).reduce((a, t) => a + t.N, 0); return { what: `grillage under ${g.wall.slice(6)} wall column at ${g.t.p[g.ax].toFixed(0)}`, N, B: g.B, D: g.D, spread: g.spread, edges: g.corner ? 2 : 1, s: g.s, wall: true }; }),
-    ...F.others.map(o => { const N = loads.filter(t => t.from === o.t.from && near(t.p, o.t.p)).reduce((a, t) => a + t.N, 0); return { what: o.outside ? `a column of the ${o.t.from} on its footing` : `pad under ${o.t.from}`, N, B: o.B, D: o.D, spread: o.spread, edges: 0, s: Infinity, outside: o.outside, from: o.t.from }; }),
-  ].map(f => ({ ...f, bearing: f.N / (f.B * f.D), rock: f.N / f.spread + raftP, punch: punching(f.N, f.B, f.D, raft, f.spread, f.edges, f.s) }));
-  const matched = fset.reduce((a, f) => a + f.N, 0), carried = loads.reduce((a, t) => a + t.N, 0);
-  const worstOf = (list, k) => list.reduce((m, c) => c[k] > m[k] ? c : m, list[0]);
-  const footed = fset.filter(f => !f.outside), wb = worstOf(fset, 'bearing'), wp = worstOf(fset, 'punch'), wr = worstOf(fset, 'rock'), tooBig = fset.filter(f => f.capped || (f.wall && f.D > GRILLAGE_MAX));
-  const gs = fset.filter(f => f.wall), tr = fset.filter(f => f.outside);
-  const ua = uprightAnchor(res), up = fset.filter(f => f.what.startsWith('pad under upright')), MN = (v) => (v / 1e6).toFixed(1);
-  const upText = ua ? `. The winding gear's upright shafts stand on pedestals ${UPRIGHT_PAD} m square: under the left, the shaft's weight and the worm's push down it while winding, ${MN(Math.max(...up.map(f => f.N)))} MN, ${MPa(Math.max(...up.map(f => f.bearing)))} MPa. The right-hand worm pulls its shaft up with ${MN(ua.P)} MN against the shaft's ${MN(ua.W)} MN of weight, so its footstep is double-acting and held down by ${ANCHOR.n} rods ${ANCHOR.d * 1000} mm across, headed ${ANCHOR.hef} m deep in the raft: at 1.5 times the pull less 0.9 times the weight, ${MN(ua.N)} MN, and the bevels' push at its foot, ${MN(ua.Md)} MN m, the worst rod carries ${MN(ua.bolt)} MN (it may ${MN(ua.FtRd)}), and the cone of raft they pull at ${MN(ua.T)} MN against ${MN(ua.NRdc)} (EN 1992-4, cracked; ${ua.edge.toFixed(1)} m from the raft's edge)` : '';
-  extra.push({ name: 'foundations: under each foot', ok: wb.bearing <= conc.fc && wp.punch <= 1 && wr.rock <= ROCK && !tooBig.length && Math.abs(matched - carried) < 1e-3 * carried && (!ua || ua.ok),
-    verdict: `a raft ${raft} m thick under the whole building; ${F.peds.length} pedestals under the towers' legs${F.peds.some(q => q.ps.length > 1) ? ` (${F.peds.filter(q => q.ps.length > 1).map(q => `${q.towers.join(' and ')} share one, ${q.B.toFixed(1)} x ${q.D.toFixed(1)} m, on a grillage`).join('; ')})` : ''}; under the wall columns, steel grillages cast into the raft's top, ${Math.min(...gs.map(f => f.B)).toFixed(1)} to ${Math.max(...gs.map(f => f.B)).toFixed(1)} m along the wall and ${Math.min(...gs.map(f => f.D)).toFixed(1)} to ${Math.max(...gs.map(f => f.D)).toFixed(1)} m in from the raft's edge; under the two stair towers, the two escape turrets and the stack, outside the raft, footings of their own as big as what stands on them (${Object.entries(OUT_FOOT).map(([k, o]) => `${k} ${Math.round(o.area)} m2`).join(', ')}), each column on a grillage ${Math.min(...tr.map(f => f.B)).toFixed(1)} to ${Math.max(...tr.map(f => f.B)).toFixed(1)} m square in its top. The concrete under the worst (${wb.what}, ${Math.round(wb.N / GRAVITY / 1e3).toLocaleString('en')} t) bears ${MPa(wb.bearing)} MPa (allowed ${MPa(conc.fc)}). Punching of a column base (EN 1992-1-1 6.4.4(2): the rock's reaction inside the control perimeter taken off, the free edge of the raft and the next column's perimeter allowed for, the worst perimeter out to 2d, 1.4 times the service load) at worst ${(wp.punch * 100).toFixed(0)}% of the raft's strength (${wp.what}). The rock under the worst foot ${MPa(wr.rock)} MPa with the raft's weight (${wr.what}), against ${MPa(ROCK)}: strong rock is a requirement of the site, to be proved by investigation${tooBig.length ? `; footings that would need more room than there is: ${tooBig.map(f => f.what).join(', ')}` : ''}${upText}${ua && !ua.ok ? ' (too much)' : ''}` });
+    verdict: wm.map(w => `${w.wall.slice(6)} ${mm(w.out)} mm out of its plane between its corners (allowed ${mm(w.L / WALL_LIMIT)}), its head ${mm(w.along)} mm along it (allowed ${mm(TOWER.H / WALL_LIMIT)})`).join('; ') + (wbad.length ? `; too much: ${wbad.map(w => `${w.wall} (${w.combo})`).join(', ')}` : '') });
+  // Foundations (see designFoundations): the footings as drawn, with the anchors drawn, against the exact analysis's loads
+  const conc = MATERIAL.concrete, F = foundation, raft = F.raft, area = (2 * (TOWER.hx + TOWER.wall)) * (2 * (TOWER.hz + TOWER.wall));
+  const everyFoot = footings(res, raft, F), foots = everyFoot.filter(f => !f.hidden), worstOf = (list, k) => list.reduce((m, c) => c[k] > m[k] ? c : m, list[0]);
+  const carried = groundLoads(res).reduce((a, t) => a + t.N, 0), matched = everyFoot.filter(f => f.kind !== 'shared').reduce((a, f) => a + f.terms.reduce((b, t) => b + downMost(t), 0), 0);
+  const wb = worstOf(foots, 'bearing'), wp = worstOf(foots, 'punch'), wr = worstOf(foots, 'rock'), wn = worstOf(foots, 'need'), ws = worstOf(foots, 'slide');
+  const lifted = foots.filter(f => f.lift && f.lift.pull > 0).reduce((m, f) => !m || f.lift.pull / f.lift.holds > m.lift.pull / m.lift.holds ? f : m, null);
+  const tooBig = foots.filter(f => f.capped || f.big), short = foots.filter(f => f.short), gs = foots.filter(f => f.kind === 'grillage'), tr = foots.filter(f => f.outside);
+  const ua = uprightAnchor(res), MN = (v) => (v / 1e6).toFixed(1), nA = foots.reduce((t, f) => t + f.anchors.n, 0);
+  const upText = ua ? `. The right-hand upright shaft's worm pulls it up with ${MN(ua.P)} MN against its ${MN(ua.W)} MN of weight, so its footstep is double-acting and held down by ${ANCHOR.n} rods ${ANCHOR.d * 1000} mm across, headed ${ANCHOR.hef} m deep in the raft: at 1.5 times the pull less 0.9 times the weight the worst rod carries ${MN(ua.bolt)} MN (it may ${MN(ua.FtRd)}), and the cone of raft they pull at ${MN(ua.T)} MN against ${MN(ua.NRdc)}` : '';
+  const rb = raftBending(F);
+  extra.push({ name: 'foundations: under each foot', ok: wb.bearing <= conc.fc && wp.punch <= 1 && wr.rock <= ROCK && ws.slide <= 1 && (!lifted || lifted.lift.pull <= lifted.lift.holds) && !tooBig.length && !short.length && Math.abs(matched - carried) < 1e-3 * carried && (!ua || ua.ok) && rb.u <= 1,
+    verdict: `every footing designed for every combination, with the moments and the push sideways the analysis hands down at its foot as well as the weight. A raft ${raft} m thick under the whole building; ${F.peds.length} pedestals under the towers' legs${F.peds.some(q => q.steel) ? ` (${F.peds.filter(q => q.steel).length} of them blocks of steel on grillages cast into the raft, ${Math.min(...F.peds.filter(q => q.steel).map(q => Math.min(...q.plate))).toFixed(1)} to ${Math.max(...F.peds.filter(q => q.steel).map(q => Math.max(...q.plate))).toFixed(1)} m a side, where concrete in the room on the floor could not bear the foot; the rest reinforced concrete)` : ' of reinforced concrete'}${F.shared.length ? ` (${F.shared.map(q => `${q.what}, ${q.B.toFixed(1)} x ${q.D.toFixed(1)} m`).join('; ')})` : ''}${F.peds.some(q => q.ps.length > 1) ? ` (${F.peds.filter(q => q.ps.length > 1).map(q => `${q.towers.join(' and ')} share one, ${q.B.toFixed(1)} x ${q.D.toFixed(1)} m`).join('; ')})` : ''}; under the wall columns steel grillages cast into the raft's top, ${Math.min(...gs.map(f => f.B)).toFixed(1)} to ${Math.max(...gs.map(f => f.B)).toFixed(1)} m along the wall and ${Math.min(...gs.map(f => f.D)).toFixed(1)} to ${Math.max(...gs.map(f => f.D)).toFixed(1)} m in; outside the raft, footings of their own (${Object.entries(OUT_FOOT).map(([k, o]) => `${k} ${Math.round(o.area)} m2`).join(', ')}). Each plate stands on grout with its anchors round its edge, ${nA} in all, grade 10.9 bars (AISC Design Guide 1: the concrete pressed over a block at one edge no harder than it may bear, the anchors at the other pulling for the rest, each way separately and the two added): at worst ${(wb.bearing / conc.fc * 100).toFixed(0)}% of what the concrete may bear (${wb.what}), and a side's anchors pulling ${MN(wn.need)} MN (${wn.what}), taken down into the concrete by ${(wn.bars * 1e4).toFixed(0)} cm2 of anchor reinforcement (EN 1992-4 7.2.1.9); sliding at worst ${(ws.slide * 100).toFixed(0)}% of friction (${MU}, 1.5 in hand) and half what the anchors may take across (${ws.what})${lifted ? `; where a grillage cast into the raft is pulled up, its hold-down bars are lapped with the raft's bottom steel and the raft holds it with its weight: at worst ${MN(lifted.lift.pull)} MN against ${MN(lifted.lift.holds)} MN, 0.9 of the raft over the length its bending spreads along (${lifted.what})` : ''}; punching (EN 1992-1-1 6.4.4) at worst ${(wp.punch * 100).toFixed(0)}% (${wp.what}); the rock under the worst foot ${MPa(wr.rock)} MPa with the raft's weight and the moments (${wr.what}), against ${MPa(ROCK)}. The raft as a plate on the rock (Hetenyi), under ${rb.what}: ${MN(rb.M)} MN m in a strip, ${(rb.u * 100).toFixed(0)}% of its strength at 0.5 % steel, its bending dying out within ${rb.len.toFixed(0)} m${tooBig.length ? `; footings that would need more room than there is: ${tooBig.map(f => f.what).join(', ')}` : ''}${short.length ? `; anchors short at ${short.map(f => f.what).join(', ')}` : ''}${upText}${ua && !ua.ok ? ' (too much)' : ''}` });
   // The ground in all: everything the raft carries, the raft, and what stands on it directly (the brick and stone below
   // the first girder); the stair towers, the escape turrets and the stack stand on footings of their own outside it
   const below = 4 * (TOWER.hx + TOWER.hz + TOWER.wall) * LEVELS[0] * BRICK_PER_M2 + Object.values(stone.faces).reduce((t, f) => t + f.bands[0].reduce((x, v) => x + v, 0), 0) * GRAVITY;
-  const raftW = area * raft * conc.rho * GRAVITY, onRaft = footed.reduce((t, f) => t + f.N, 0), total = onRaft + below + raftW;
+  const raftW = area * raft * conc.rho * GRAVITY, onRaft = foots.filter(f => !f.outside).reduce((t, f) => t + f.N, 0), total = onRaft + below + raftW;
   extra.push({ name: 'ground: under the raft', ok: total / area <= ROCK,
-    verdict: `${Math.round(total / GRAVITY / 1000).toLocaleString('en')} t (of it the raft ${Math.round(raftW / GRAVITY / 1000).toLocaleString('en')} t) on ${Math.round(area).toLocaleString('en')} m2: ${MPa(total / area)} MPa on average, and ${MPa(wr.rock)} under the worst foot, against ${MPa(ROCK)} for strong rock (the usual presumed bearing value for strong limestone or hard sandstone; strong igneous rock would be taken at 10): a requirement of the site, to be proved by investigation. Outside the raft, on footings of their own, the stair towers, the escape turrets and the stack put ${[...new Set(tr.map(f => f.from))].map(k => `${Math.round(tr.filter(f => f.from === k).reduce((t, f) => t + f.N, 0) / GRAVITY / 1000).toLocaleString('en')} t (${k})`).join(', ')} on the rock, ${MPa(Math.max(...tr.map(f => f.rock)))} MPa at worst` });
+    verdict: `${Math.round(total / GRAVITY / 1000).toLocaleString('en')} t at most (of it the raft ${Math.round(raftW / GRAVITY / 1000).toLocaleString('en')} t) on ${Math.round(area).toLocaleString('en')} m2: ${MPa(total / area)} MPa on average, and ${MPa(wr.rock)} under the worst foot, against ${MPa(ROCK)} for strong rock (the usual presumed bearing value for strong limestone or hard sandstone; strong igneous rock would be taken at 10): a requirement of the site, to be proved by investigation, as is its modulus (${GROUND.E / 1e9} GPa, which the feet stand on as springs, so that the analysis settles them). Outside the raft, on footings of their own, ${[...new Set(tr.map(f => f.from))].map(k => `${Math.round(tr.filter(f => f.from === k).reduce((t, f) => t + f.N, 0) / GRAVITY / 1000).toLocaleString('en')} t (${k})`).join(', ')} on the rock, ${MPa(Math.max(...tr.map(f => f.rock)))} MPa at worst` });
+  // What it is all designed for, and what the warmth does to the clock's meshes: the frames are steel and the wheels
+  // brass, which grows half as much again; one bearing of each arbor locates it and the other lets it slide.
+  const warmMesh = MESHES.filter(([a, b]) => ARBOR[a] && ARBOR[b] && towers.some(t => t.arbor === a) && towers.some(t => t.arbor === b)).map(([a, b, z, what]) => {
+    const A = ARBOR[a], B = ARBOR[b], L = Math.hypot(B.x - A.x, B.y - A.y), u = [(B.x - A.x) / L, (B.y - A.y) / L];
+    const mv = (n) => { const zs = SHAFT[n].bearings, t = (z - zs[0]) / (zs[1] - zs[0]), d = zs.map(zz => displacement(res, 'towers', [ARBOR[n].x, ARBOR[n].y, zz], { warm: 1 }) || [0, 0, 0]); return [0, 1].map(i => d[0][i] * (1 - t) + d[1][i] * t); };
+    const da = mv(a), db = mv(b), frame = (db[0] - da[0]) * u[0] + (db[1] - da[1]) * u[1];
+    return { what, mis: 19e-6 * WARM * L - frame };
+  });
+  extra.push({ name: 'loads: what it is designed for', ok: true,
+    verdict: `its own weight, as drawn; the clock going and being wound; crowds of ${LIVE.q / 1e3} kPa on every floor, stair, landing, deck and gallery people walk on, in ${LIVE.cell} m squares, all and alternate; wind of ${(WIND_Q / 1e3).toFixed(2)} kPa peak at the walls' head (EN 1991-1-4: vb 25 m/s, terrain II, which gives ${(WIND_Q / 1e3).toFixed(2)} kPa at 240 m), growing with height above it (${(windAt(320) / 1e3).toFixed(2)} kPa at 320 m, ${(windAt(380) / 1e3).toFixed(2)} at 380), on the walls and the crown and lifting the flat, with the inside at +0.2 or -0.3 or, the dial's glass broken, at 0.9 of the outside pressure on the dial (an accidental case, checked as an ordinary one; a building this size wants a wind-tunnel test before it is built); the frames ${WARM} K warmer or colder than the ground (taken as for steel out of doors, since the broken dial lets the weather in; only the frames that stand on the ground, since one hung from another moves with it), the walls ${SUN_DT} K more across where the sun is; an earthquake of ${QUAKE * 100}% of the weight sideways (equivalent static, at 0.7 for ASD); and a sway imperfection of 1/${Math.round(1 / PHI)} in every combination. Warmth moves the meshes apart or together by at most ${(Math.max(0, ...warmMesh.map(m => Math.abs(m.mis))) * 1000).toFixed(1)} mm (${warmMesh.map(m => `${m.what} ${(m.mis * 1000).toFixed(1)}`).join(', ')}), the brass wheels growing more than the steel between their centres: that is the backlash the teeth are cut with` });
+  // Robustness (EN 1991-1-7 Annex A, consequence class 3): ties, and the hall's frame tied together at every storey
+  const ties = ['shell back', 'shell front', 'shell left', 'shell right'].map(w => {
+    const ms = getAssembly(w)?.members || [], gir = ms.filter(m => m.label === 'girder'), col = ms.filter(m => m.label === 'column');
+    const Ti = Math.max(75e3, ...gir.map(m => 0.8 * (m.carries + m.section.A * m.material.rho * GRAVITY) * 10)), cap = Math.min(...gir.map(m => m.section.A * plies(m.section, m.material).fy));
+    const Tv = Math.max(...gir.map(m => (m.carries + m.section.A * m.material.rho * GRAVITY) * 10)), capV = Math.min(...col.map(m => m.section.A * plies(m.section, m.material).fy));
+    return { w, h: Ti / cap, v: Tv / capV };
+  });
+  const tw = ties.reduce((m, t) => Math.max(m, t.h, t.v), 0);
+  extra.push({ name: 'robustness: ties', ok: tw <= 1,
+    verdict: `every girder of the walls is a horizontal tie, continuous round the building, for 0.8 of what a bay of it carries (EN 1991-1-7 A.5.2, at least 75 kN), and every column a vertical tie, its splices full strength, for the most one storey hands it (A.6): at worst ${(tw * 100).toFixed(0)}% of their strength (at yield, the accidental case). The towers' legs, the arbors' bearings and the ring round the dial are key elements: what each carries has no other way down, so each is designed with the margins above and is not to be lost; the loss of a hanger or a wall column has not been analysed` });
+  // Connections
+  const hm = Math.max(0, ...hung.map(h => sizes.get(`${h.e.name}|hanger`) || 0.02)), hT = Math.PI * hm * hm * plies(SECTION.round(hm), BAR).Ft, dp = 1.6 * hm + 0.03, pinV = 2 * 0.6 * 1000e6 * Math.PI * dp * dp / 4 / 1.25;
+  const seat = Math.max(...towers.flatMap(T => T.loads.map(L => L / (2 * 0.8 * seatW(L)))));
+  extra.push({ name: 'connections', ok: 1.5 * hT <= pinV && seat <= SEAT_FP && !short.length,
+    verdict: `the feet: their plates and anchors (above); the bearing seats: the heaviest housing bears ${MPa(seat)} MPa on its shim packs (S355 milled, allowed ${MPa(SEAT_FP)}: AISC 360-16 J7); the hangers: each bar's fork on a pin ${(dp * 1000).toFixed(0)} mm across in double shear (grade 10.9), ${(pinV / 1e6).toFixed(1)} MN against 1.5 times the most the bar can carry, ${(1.5 * hT / 1e6).toFixed(2)} MN; the plies of a laminated plate are stitched by M${STITCH.d * 1000} bolts, preloaded, in rows ${STITCH.pitch * 1000} mm apart each way (each member is checked with its plies buckling between stitches and its net section through the holes); the links between towers and the struts are pinned, and checked as the members they are; every other joint is welded full strength or bolted to carry what its member can` });
   // The brick and the stone. Each storey of brick stands on its own girder; each storey of stone on its own shelf.
   const brick = MATERIAL.brick, tallest = Math.max(...LEVELS.map((y, k) => y - (k ? LEVELS[k - 1] : 0))), foot = brick.rho * GRAVITY * tallest;
   extra.push({ name: 'shell: brick, crushing', ok: foot <= brick.fc,

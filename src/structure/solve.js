@@ -10,12 +10,14 @@
 // the freedom that nothing resists: which is what "attached to nothing" means in numbers.
 //
 // The stiffness matrix of a building is almost all zeros: a joint is touched only by the
-// members that meet there. The nodes are numbered so that joined nodes are numbered close
-// together (reverse Cuthill-McKee), which keeps every column of the matrix short, and only the
-// part of each column from its first non-zero down to the diagonal is stored and factorised
-// (a skyline, or profile, solver). The factorisation is exact: L D L', the same answer the dense
-// one gives, and a pivot that vanishes still names the loose freedom.
-//
+// members that meet there, and only what is not zero is stored. Factorising it fills in some of the
+// zeros, and how many depends on the order the joints are numbered in. They are numbered by nested
+// dissection: the structure is cut in two across its longest extent along a line of joints, each
+// half is numbered (cut again the same way) before the joints on the cut, and so on down to pieces
+// of a few dozen joints. Eliminating a piece then only fills in among its own joints and the cuts
+// around it. The factorisation is exact, L D L', the same answer the dense one gives, and a pivot
+// that vanishes still names a loose freedom.
+
 // Stability. A member in compression is less stiff sideways than one that is not: a column
 // pushed hard enough buckles with no sideways load at all. That is the geometric stiffness Kg,
 // proportional to each member's axial force N (tension stiffens, compression softens). The
@@ -24,6 +26,22 @@
 // method, and definite() says exactly whether K + lambda Kg is still positive definite at a given
 // lambda (by counting negative pivots). A frame loaded by N and analysed with K + Kg instead of K
 // includes the extra moments from its own sway (P-delta).
+//
+// Springs. A node may be held to the ground by springs instead of being fixed (`spring`: six
+// stiffnesses, N/m and N m/rad, in world axes): a foot on its foundation, which settles and rocks
+// as the rock under it allows. And a spring element joins two nodes through a connector that is
+// not modelled as a member (a tie from one frame to another): { a, b, spring: [[k, c], ...] },
+// each c twelve numbers saying what stretches the spring in terms of the two nodes' freedoms
+// (world axes), so that its stiffness is the sum of k c c'.
+//
+// The direct analysis (AISC 360 Chapter C). solveCases can scale the elastic stiffness (kScale) and
+// the geometric stiffness (gScale) separately: (0.8 K + 1.6 Kg) u = 1.6 F, the frame at 1.6 times
+// its working loads with its stiffness reduced to 0.8, is the same as (0.5 K + Kg) u = F, and the
+// member forces it returns are then already divided back by 1.6.
+//
+// Imposed strains: a case may warm members (`strains`: member -> [axial strain, curvature of v'',
+// curvature of w'']), which then push on whatever holds them. And modes() gives the natural
+// frequency of a frame from its stiffness and its lumped masses.
 //
 // Pure numbers: nothing here knows about the scene, three.js or the physics world.
 
@@ -93,117 +111,171 @@ function rotate(k, R) {
 }
 const toLocal = (R, v) => { const o = new Float64Array(12); for (let b = 0; b < 4; b++) for (let i = 0; i < 3; i++) o[3 * b + i] = R[i][0] * v[3 * b] + R[i][1] * v[3 * b + 1] + R[i][2] * v[3 * b + 2]; return o; };
 
-// Reverse Cuthill-McKee: number the nodes outward from one end of the structure, breadth first,
-// fewest connections first, then reverse. Joined nodes end up close together in the numbering.
-function rcm(n, adj) {
-  const deg = adj.map(a => a.length), seen = new Uint8Array(n), scratch = new Uint8Array(n), order = [];
-  const bfs = (s, mark) => {
-    const lev = [s], out = [s]; mark[s] = 1;
-    for (let h = 0; h < out.length; h++) {
-      const v = out[h], nb = adj[v].filter(w => !mark[w]).sort((a, b) => deg[a] - deg[b]);
-      for (const w of nb) if (!mark[w]) { mark[w] = 1; out.push(w); }        // (two members may join the same two nodes)
-      lev.push(out.length);
+// Nested dissection, by the joints' positions: cut the set at its middle joint across each of the three axes in turn;
+// the joints on one side that touch the other (the smaller such set) are that cut's separator. The cut with the
+// smallest separator for how evenly it halves the set is taken, its separator numbered after both sides, which are
+// numbered the same way first.
+function dissect(nodes, adj) {
+  const n = nodes.length, out = [], side = new Int8Array(n).fill(-1);
+  const touching = (S, other) => S.filter(v => adj[v].some(w => side[w] === other));
+  const cut = (set) => {
+    if (set.length <= 8) { for (const v of set) out.push(v); return; }
+    let best = null;
+    for (let d = 0; d < 3; d++) {
+      const sorted = set.slice().sort((a, b) => nodes[a].p[d] - nodes[b].p[d]), half = sorted.length >> 1, mid = nodes[sorted[half]].p[d];
+      let L = [], R = [];
+      for (const v of set) (nodes[v].p[d] < mid ? L : R).push(v);
+      if (!L.length || !R.length) { L = sorted.slice(0, half); R = sorted.slice(half); }       // (many joints at one place)
+      for (const v of L) side[v] = 0;
+      for (const v of R) side[v] = 1;
+      const bL = touching(L, 1), bR = touching(R, 0), S = bL.length <= bR.length ? bL : bR;
+      for (const v of set) side[v] = -1;
+      const score = S.length / Math.max(0.2, Math.min(L.length, R.length) / set.length);
+      if (!best || score < best.score) best = { score, L, R, S };
     }
-    return out;
+    const sep = new Set(best.S);
+    cut(best.L.filter(v => !sep.has(v)));
+    cut(best.R.filter(v => !sep.has(v)));
+    for (const v of sep) out.push(v);
   };
-  for (let s0 = 0; s0 < n; s0++) {
-    if (seen[s0]) continue;
-    // a pseudo-peripheral start: the far end of a breadth-first sweep, twice
-    let s = s0;
-    if (adj[s0].length) for (let k = 0; k < 2; k++) { const o = bfs(s, scratch.fill(0)); s = o[o.length - 1]; }       // (marks only reach s0's own component, which nothing has seen yet)
-    const comp = bfs(s, seen);
-    order.push(...comp);
-  }
-  return order.reverse();
+  cut([...Array(n).keys()]);
+  return out;
 }
 
 // Everything about a frame that does not depend on the loads: its numbering, its members'
 // matrices, and the shape of its stiffness matrix.
-//   nodes:   [{ p: [x, y, z], fix: [6 booleans] | undefined }]
-//   members: [{ a, b (node indices), E, G, A, Iy, Iz, J, axial }]
+//   nodes:   [{ p: [x, y, z], fix: [6 booleans] | undefined, spring: [6 stiffnesses] | undefined }]
+//   members: [{ a, b (node indices), E, G, A, Iy, Iz, J, axial }] or [{ a, b, spring: [[k, c], ...] }]
+const I3 = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+function springK(m) {
+  const k = new Float64Array(144);
+  for (const [s, c] of m.spring) for (let i = 0; i < 12; i++) if (c[i]) for (let j = 0; j < 12; j++) k[i * 12 + j] += s * c[i] * c[j];
+  return k;
+}
 export function prepare(nodes, members) {
   const n = nodes.length, dof = new Int32Array(6 * n).fill(-1);
   const framed = new Uint8Array(n), adj = Array.from({ length: n }, () => []);
-  for (const m of members) { if (!m.axial) { framed[m.a] = 1; framed[m.b] = 1; } adj[m.a].push(m.b); adj[m.b].push(m.a); }
+  for (const m of members) {
+    if (m.spring) { for (const [, c] of m.spring) { if (c[3] || c[4] || c[5]) framed[m.a] = 1; if (c[9] || c[10] || c[11]) framed[m.b] = 1; } }
+    else if (!m.axial) { framed[m.a] = 1; framed[m.b] = 1; }
+    adj[m.a].push(m.b); adj[m.b].push(m.a);
+  }
+  nodes.forEach((nd, i) => { if (nd.spring && (nd.spring[3] || nd.spring[4] || nd.spring[5])) framed[i] = 1; });
   let neq = 0;
-  for (const i of rcm(n, adj)) for (let d = 0; d < 6; d++) {
+  for (const i of dissect(nodes, adj)) for (let d = 0; d < 6; d++) {
     if (nodes[i].fix && nodes[i].fix[d]) continue;
     if (d >= 3 && !framed[i]) continue;          // a node touched only by tie rods has no rotational stiffness: leave its rotations out
     dof[6 * i + d] = neq++;
   }
   const el = members.map((m) => {
     const pa = nodes[m.a].p, pb = nodes[m.b].p, L = Math.hypot(pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]);
-    const R = axes(pa, pb), kl = localK(m, L), idx = new Int32Array(12), eq = new Int32Array(12);
+    const idx = new Int32Array(12), eq = new Int32Array(12);
     for (let d = 0; d < 6; d++) { idx[d] = 6 * m.a + d; idx[6 + d] = 6 * m.b + d; }
     for (let i = 0; i < 12; i++) eq[i] = dof[idx[i]];
+    if (m.spring) { const k = springK(m); return { L, R: I3, kl: k, kg: k, idx, eq, spring: true }; }        // (already in world axes)
+    const R = axes(pa, pb), kl = localK(m, L);
     return { L, R, kl, kg: rotate(kl, R), idx, eq };
   });
-  // the skyline: for each equation, the first row in its column that is not zero
-  const fr = new Int32Array(neq); for (let j = 0; j < neq; j++) fr[j] = j;
-  for (const e of el) { let mn = Infinity; for (const q of e.eq) if (q >= 0 && q < mn) mn = q; for (const q of e.eq) if (q >= 0 && mn < fr[q]) fr[q] = mn; }
-  const p = new Int32Array(neq + 1);
-  for (let j = 0; j < neq; j++) p[j + 1] = p[j] + (j - fr[j] + 1);
-  return { nodes, members, n, neq, dof, el, fr, p, size: p[neq] };
+  // the springs that hold nodes to the ground, by equation
+  const ground = [];
+  nodes.forEach((nd, i) => { if (nd.spring) for (let d = 0; d < 6; d++) if (nd.spring[d] && dof[6 * i + d] >= 0) ground.push([6 * i + d, dof[6 * i + d], nd.spring[d]]); });
+  // the upper triangle's pattern, column by column, rows in order: a joint's freedoms with its own and its neighbours'
+  const near = adj.map((a, i) => [...new Set([i, ...a])]);
+  const cp = new Int32Array(neq + 1);
+  const rowsOf = (i, j, put) => { for (const w of near[i]) for (let d = 0; d < 6; d++) { const q = dof[6 * w + d]; if (q >= 0 && q <= j) put(q); } };
+  for (let i = 0; i < n; i++) for (let d = 0; d < 6; d++) { const j = dof[6 * i + d]; if (j < 0) continue; let c = 0; rowsOf(i, j, () => c++); cp[j + 1] = c; }
+  for (let j = 0; j < neq; j++) cp[j + 1] += cp[j];
+  const ri = new Int32Array(cp[neq]), diag = new Int32Array(neq);
+  for (let i = 0; i < n; i++) for (let d = 0; d < 6; d++) {
+    const j = dof[6 * i + d]; if (j < 0) continue;
+    let c = cp[j]; rowsOf(i, j, (q) => { ri[c++] = q; });
+    ri.subarray(cp[j], cp[j + 1]).sort();
+    diag[j] = cp[j + 1] - 1;
+  }
+  const where = (i, j) => { let lo = cp[j], hi = cp[j + 1] - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (ri[m] < i) lo = m + 1; else hi = m; } return lo; };
+  for (const e of el) {
+    e.pos = new Int32Array(144).fill(-1);
+    for (let i = 0; i < 12; i++) { const gi = e.eq[i]; if (gi < 0) continue; for (let j = 0; j < 12; j++) { const gj = e.eq[j]; if (gj >= gi) e.pos[i * 12 + j] = where(gi, gj); } }
+  }
+  // the shape of the factor (Liu's elimination tree, and how many entries each column of L has)
+  const parent = new Int32Array(neq), Lnz = new Int32Array(neq), flag = new Int32Array(neq), Lp = new Int32Array(neq + 1);
+  for (let k = 0; k < neq; k++) {
+    parent[k] = -1; flag[k] = k;
+    for (let q = cp[k]; q < cp[k + 1]; q++) for (let i = ri[q]; i < k && flag[i] !== k; i = parent[i]) { if (parent[i] === -1) parent[i] = k; Lnz[i]++; flag[i] = k; }
+  }
+  for (let k = 0; k < neq; k++) Lp[k + 1] = Lp[k] + Lnz[k];
+  return { nodes, members, n, neq, dof, el, cp, ri, diag, parent, Lp, Li: new Int32Array(Lp[neq]), size: cp[neq], ground };
 }
 
 function addTo(M, vals, e, k, scale = 1) {
-  const { fr, p } = M;
-  for (let i = 0; i < 12; i++) {
-    const gi = e.eq[i]; if (gi < 0) continue;
-    for (let j = 0; j < 12; j++) { const gj = e.eq[j]; if (gj < gi) continue; vals[p[gj] + gi - fr[gj]] += scale * k[i * 12 + j]; }
-  }
+  const pos = e.pos;
+  for (let t = 0; t < 144; t++) { const q = pos[t]; if (q >= 0) vals[q] += scale * k[t]; }
 }
 export function stiffness(M) {
   const K = new Float64Array(M.size);
   for (const e of M.el) addTo(M, K, e, e.kg);
+  for (const [, q, k] of M.ground) K[M.diag[q]] += k;
   return K;
 }
 // N: axial force in each member (tension positive)
 export function geometric(M, N) {
   const Kg = new Float64Array(M.size);
-  M.el.forEach((e, k) => { if (N[k]) addTo(M, Kg, e, rotate(localKg(M.members[k], e.L, N[k]), e.R)); });
+  M.el.forEach((e, k) => { if (N[k] && !e.spring) addTo(M, Kg, e, rotate(localKg(M.members[k], e.L, N[k]), e.R)); });
   return Kg;
 }
 
-// L D L' in place, column by column. Returns { ok, D, negatives, at }: `at` is the first
-// equation whose pivot vanished (a freedom nothing resists), when `strict` asks for that.
+// L D L', row by row (the up-looking method: row k of L is found by a sparse triangular solve with
+// the rows above it, along the elimination tree). Returns { ok, D, negatives, Lx }, or { ok: false, at }
+// with `at` the first equation whose pivot vanished (a freedom nothing resists), when `strict` asks for that.
 export function factor(M, A, { strict = true } = {}) {
-  const { fr, p, neq } = M, D = new Float64Array(neq);
-  let scale = 0; for (let j = 0; j < neq; j++) scale = Math.max(scale, Math.abs(A[p[j] + j - fr[j]]));
+  const { cp, ri, diag, parent, Lp, Li, neq: n } = M;
+  const D = new Float64Array(n), Lx = new Float64Array(Lp[n]), Y = new Float64Array(n);
+  const pattern = new Int32Array(n), flag = new Int32Array(n), Lnz = new Int32Array(n);
+  let scale = 0; for (let j = 0; j < n; j++) scale = Math.max(scale, Math.abs(A[diag[j]]));
   let negatives = 0;
-  for (let j = 0; j < neq; j++) {
-    const pj = p[j], fj = fr[j];
-    for (let i = fj + 1; i < j; i++) {                // g_ij = a_ij - sum l_ki g_kj
-      const fi = fr[i], pi = p[i], k0 = fi > fj ? fi : fj;
-      let s = 0;
-      for (let k = k0; k < i; k++) s += A[pi + k - fi] * A[pj + k - fj];
-      A[pj + i - fj] -= s;
+  for (let k = 0; k < n; k++) {
+    let top = n; flag[k] = k;
+    for (let q = cp[k]; q < cp[k + 1]; q++) {
+      let i = ri[q]; Y[i] += A[q];
+      let len = 0;
+      for (; flag[i] !== k; i = parent[i]) { pattern[len++] = i; flag[i] = k; }
+      while (len > 0) pattern[--top] = pattern[--len];
     }
-    const diag = A[pj + j - fj];
-    let d = diag;
-    for (let i = fj; i < j; i++) { const g = A[pj + i - fj], l = g / D[i]; d -= l * g; A[pj + i - fj] = l; }
-    if (strict && !(d > 1e-10 * Math.abs(diag) && d > 1e-13 * scale)) return { ok: false, at: j };
+    let d = Y[k]; Y[k] = 0;
+    for (; top < n; top++) {
+      const i = pattern[top], yi = Y[i], end = Lp[i] + Lnz[i]; Y[i] = 0;
+      for (let q = Lp[i]; q < end; q++) Y[Li[q]] -= Lx[q] * yi;
+      const l = yi / D[i]; d -= l * yi;
+      Li[end] = k; Lx[end] = l; Lnz[i]++;
+    }
+    const a = A[diag[k]];
+    if (strict && !(d > 1e-10 * Math.abs(a) && d > 1e-13 * scale)) return { ok: false, at: k };
     if (d <= 0) negatives++;
-    D[j] = d; A[pj + j - fj] = d;
+    D[k] = d;
   }
-  return { ok: true, D, negatives, L: A };
+  return { ok: true, D, negatives, Lx };
 }
 // solve with a factorised matrix, in place on b
 export function back(M, F, b) {
-  const { fr, p, neq } = M, A = F.L, D = F.D;
-  for (let j = 0; j < neq; j++) { const pj = p[j], fj = fr[j]; let s = b[j]; for (let i = fj; i < j; i++) s -= A[pj + i - fj] * b[i]; b[j] = s; }
-  for (let j = 0; j < neq; j++) b[j] /= D[j];
-  for (let j = neq - 1; j >= 0; j--) { const pj = p[j], fj = fr[j], x = b[j]; for (let i = fj; i < j; i++) b[i] -= A[pj + i - fj] * x; }
+  const { Lp, Li, neq: n } = M, Lx = F.Lx, D = F.D;
+  for (let j = 0; j < n; j++) { const x = b[j]; if (x) for (let q = Lp[j]; q < Lp[j + 1]; q++) b[Li[q]] -= Lx[q] * x; }
+  for (let j = 0; j < n; j++) b[j] /= D[j];
+  for (let j = n - 1; j >= 0; j--) { let s = b[j]; for (let q = Lp[j]; q < Lp[j + 1]; q++) s -= Lx[q] * b[Li[q]]; b[j] = s; }
   return b;
 }
-// y = A x for a symmetric skyline matrix
-function mult(M, A, x, y) {
-  const { fr, p, neq } = M; y.fill(0);
-  for (let j = 0; j < neq; j++) {
-    const pj = p[j], fj = fr[j], xj = x[j]; let s = 0;
-    for (let i = fj; i < j; i++) { const a = A[pj + i - fj]; y[i] += a * xj; s += a * x[i]; }
-    y[j] += s + A[pj + j - fj] * xj;
-  }
+// A symmetric matrix in that pattern as the list of what is in it that is not zero (a geometric stiffness or a mass,
+// multiplied by many times, is mostly zeros), so that multiplying by it costs what is in it.
+function compact(M, A) {
+  const { cp, ri, neq } = M; let nz = 0;
+  for (let i = 0; i < A.length; i++) if (A[i]) nz++;
+  const row = new Int32Array(nz), col = new Int32Array(nz), val = new Float64Array(nz); let q = 0;
+  for (let j = 0; j < neq; j++) for (let t = cp[j]; t < cp[j + 1]; t++) { const a = A[t]; if (a) { row[q] = ri[t]; col[q] = j; val[q++] = a; } }
+  return { row, col, val };
+}
+// y = A x for such a list
+function multSparse(S, x, y) {
+  const { row, col, val } = S; y.fill(0);
+  for (let q = 0; q < val.length; q++) { const i = row[q], j = col[q], a = val[q]; y[i] += a * x[j]; if (i !== j) y[j] += a * x[i]; }
   return y;
 }
 
@@ -231,9 +303,10 @@ export function critical(M, FK, Kg, { steps = 60, tol = 1e-7 } = {}) {
   if (!(bn > 0)) return { lambda: Infinity, converged: true };
   let q = r.map(v => v / bn), pk = s0.map(v => v / bn);              // pk = K q, kept alongside q throughout
   let best = { lambda: Infinity, converged: false }, last = 0;
+  const S = compact(M, Kg);
   for (let j = 0; j < Math.min(steps, n); j++) {
     Q.push(q); P.push(pk);
-    const w = mult(M, Kg, q, new Float64Array(n)); for (let i = 0; i < n; i++) w[i] = -w[i];     // w = -Kg q
+    const w = multSparse(S, q, new Float64Array(n)); for (let i = 0; i < n; i++) w[i] = -w[i];     // w = -Kg q
     const z = back(M, FK, Float64Array.from(w));                                           // z = K^-1 w, so K z = w
     const a = dot(q, w); alpha.push(a);
     const kz = Float64Array.from(w);
@@ -310,45 +383,79 @@ function lineLoads(q, L) {
 // Returns { unstable } or { cases: [{ u, forces, reactions }], K, FK }. A member's `forces` are
 // { L, N, f, q }: f the twelve end forces in its own axes (by the nodes on the member), q its
 // load per metre in its own axes, N its axial force (tension positive) at end b.
-export function solveCases(M, cases, { N = null, K = null } = {}) {
+// Imposed strains (c.strains: Map(member index -> [eps, kv, kw]), the free axial strain and the free
+// curvatures v'' and w'' of a member warmed evenly and warmed more on one side): the forces that hold
+// its ends where they are, put on the joints instead. They are taken at the members' full stiffness.
+function strainLoads(m, s) {
+  const f = new Float64Array(12), EA = m.E * m.A * s[0];
+  f[0] = -EA; f[6] = EA;
+  if (!m.axial) { const Mz = m.E * m.Iz * (s[1] || 0), My = m.E * m.Iy * (s[2] || 0); f[5] = -Mz; f[11] = Mz; f[4] = My; f[10] = -My; }
+  return f;
+}
+export function solveCases(M, cases, { N = null, K = null, kScale = 1, gScale = 1 } = {}) {
   const { neq, dof, el, n } = M;
   K = K || stiffness(M);
-  let A = K;
-  if (N) { const Kg = geometric(M, N); A = new Float64Array(M.size); for (let i = 0; i < A.length; i++) A[i] = K[i] + Kg[i]; }
-  else A = Float64Array.from(K);
+  let A;
+  if (N) { const Kg = geometric(M, N); A = new Float64Array(M.size); for (let i = 0; i < A.length; i++) A[i] = kScale * K[i] + gScale * Kg[i]; }
+  else { A = Float64Array.from(K); if (kScale !== 1) for (let i = 0; i < A.length; i++) A[i] *= kScale; }
   const F = factor(M, A);
   if (!F.ok) {
     let g = 0; for (; g < dof.length; g++) if (dof[g] === F.at) break;
     // (every equation belongs to a freedom of some node; if not, say so rather than name a node that is not there)
     return { unstable: g < dof.length ? { node: Math.floor(g / 6), freedom: g % 6 } : { node: -1, freedom: -1 } };
   }
+  const gk = N ? el.map((e, k) => (N[k] && !e.spring ? localKg(M.members[k], e.L, N[k]) : null)) : null;
   const out = cases.map((c) => {
-    const loads = Float64Array.from(c.loads), local = new Map();
+    const loads = Float64Array.from(c.loads), fes = new Array(el.length), qs = new Array(el.length);
+    const put = (e, fe) => { const R = e.R; for (let b = 0; b < 4; b++) for (let i = 0; i < 3; i++) loads[e.idx[3 * b + i]] += R[0][i] * fe[3 * b] + R[1][i] * fe[3 * b + 1] + R[2][i] * fe[3 * b + 2]; };
     // what the members' own loads put on the joints
     if (c.lines) for (const [k, w] of c.lines) {
       const e = el[k], R = e.R, q = [0, 1, 2].map(i => R[i][0] * w[0] + R[i][1] * w[1] + R[i][2] * w[2]), fe = lineLoads(q, e.L);
-      local.set(k, { q, fe });
-      for (let b = 0; b < 4; b++) for (let i = 0; i < 3; i++) loads[e.idx[3 * b + i]] += R[0][i] * fe[3 * b] + R[1][i] * fe[3 * b + 1] + R[2][i] * fe[3 * b + 2];
+      fes[k] = fe; qs[k] = q;
+      put(e, fe);
+    }
+    if (c.strains) for (const [k, s] of c.strains) {
+      const e = el[k]; if (e.spring) continue;
+      const fe = strainLoads(M.members[k], s);
+      put(e, fe);
+      if (fes[k]) for (let i = 0; i < 12; i++) fes[k][i] += fe[i]; else fes[k] = fe;
     }
     const u = new Float64Array(neq);
     for (let i = 0; i < 6 * n; i++) if (dof[i] >= 0) u[dof[i]] = loads[i];
     back(M, F, u);
     const U = new Float64Array(6 * n);
     for (let i = 0; i < 6 * n; i++) if (dof[i] >= 0) U[i] = u[dof[i]];
-    const R = new Float64Array(6 * n);
-    const forces = el.map((e, k) => {
-      const ul = toLocal(e.R, Array.from(e.idx, i => U[i])), fl = new Float64Array(12), Rm = e.R;
-      for (let i = 0; i < 12; i++) { let s = 0; for (let j = 0; j < 12; j++) s += e.kl[i * 12 + j] * ul[j]; fl[i] = s; }
-      if (N && N[k]) { const g = localKg(M.members[k], e.L, N[k]); for (let i = 0; i < 12; i++) { let s = 0; for (let j = 0; j < 12; j++) s += g[i * 12 + j] * ul[j]; fl[i] += s; } }
-      const ln = local.get(k);
-      if (ln) for (let i = 0; i < 12; i++) fl[i] -= ln.fe[i];
-      for (let b = 0; b < 4; b++) for (let i = 0; i < 3; i++) R[e.idx[3 * b + i]] += Rm[0][i] * fl[3 * b] + Rm[1][i] * fl[3 * b + 1] + Rm[2][i] * fl[3 * b + 2];
-      return { L: e.L, N: fl[6], f: fl, q: ln ? ln.q : [0, 0, 0] };
-    });
+    const R = new Float64Array(6 * n), ul = new Float64Array(12), forces = new Array(el.length);
+    for (let k = 0; k < el.length; k++) {
+      const e = el[k], Rm = e.R, idx = e.idx, kl = e.kl, fl = new Float64Array(12);
+      for (let b = 0; b < 4; b++) {
+        const x = U[idx[3 * b]], y = U[idx[3 * b + 1]], z = U[idx[3 * b + 2]];
+        for (let i = 0; i < 3; i++) ul[3 * b + i] = Rm[i][0] * x + Rm[i][1] * y + Rm[i][2] * z;
+      }
+      for (let i = 0; i < 12; i++) { let s = 0; for (let j = 0; j < 12; j++) s += kl[i * 12 + j] * ul[j]; fl[i] = kScale * s; }
+      if (gk && gk[k]) { const g = gk[k]; for (let i = 0; i < 12; i++) { let s = 0; for (let j = 0; j < 12; j++) s += g[i * 12 + j] * ul[j]; fl[i] += gScale * s; } }
+      const fe = fes[k];
+      if (fe) for (let i = 0; i < 12; i++) fl[i] -= fe[i];
+      for (let b = 0; b < 4; b++) for (let i = 0; i < 3; i++) R[idx[3 * b + i]] += Rm[0][i] * fl[3 * b] + Rm[1][i] * fl[3 * b + 1] + Rm[2][i] * fl[3 * b + 2];
+      // (a spring's force: what its first part is stretched by, times its stiffness)
+      if (e.spring) { const [s, cv] = M.members[k].spring[0]; let d = 0; for (let i = 0; i < 12; i++) d += cv[i] * U[idx[i]]; forces[k] = { L: e.L, N: kScale * s * d, f: fl, q: [0, 0, 0], spring: true }; }
+      else forces[k] = { L: e.L, N: fl[6], f: fl, q: qs[k] || [0, 0, 0] };
+    }
     for (let i = 0; i < 6 * n; i++) R[i] = dof[i] >= 0 ? 0 : R[i] - c.loads[i];
+    for (const [i, , k] of M.ground) R[i] = -kScale * k * U[i];            // what a spring to the ground holds back with is the ground's reaction
     return { u: U, forces, reactions: R };
   });
   return { cases: out, K, FK: F };
+}
+
+// The lowest natural frequency of a prepared frame, Hz, with `mass` (6 n numbers: kg on each
+// translational freedom that is to move; others zero) lumped at its nodes: K phi = w^2 M phi,
+// solved by the same Lanczos iteration as buckling (critical() with -M in place of Kg).
+export function modes(M, FK, mass) {
+  const Mm = new Float64Array(M.size);
+  for (let i = 0; i < 6 * M.n; i++) { const q = M.dof[i]; if (q >= 0 && mass[i]) Mm[M.diag[q]] = -mass[i]; }
+  const r = critical(M, FK, Mm, { steps: 80, tol: 1e-6 });
+  return { hz: Math.sqrt(r.lambda) / (2 * Math.PI), mode: r.mode, converged: r.converged };
 }
 
 // The simple interface: one load vector of nodal forces, first order.

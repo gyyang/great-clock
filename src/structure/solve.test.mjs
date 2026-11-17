@@ -1,6 +1,6 @@
 // Checks the solver against cases with textbook answers. Run: npm test
-import { solveFrame, prepare, solveCases, buckling, stiffness, geometric, definite, axes } from './solve.js';
-import { assembly, analyse, resetStructure, SECTION, MATERIAL, GRAVITY } from './model.js';
+import { solveFrame, prepare, solveCases, buckling, stiffness, geometric, definite, axes, modes } from './solve.js';
+import { assembly, analyse, resetStructure, SECTION, MATERIAL, GRAVITY, grade, plies } from './model.js';
 
 let failed = 0;
 const near = (name, got, want, tol = 1e-3) => {
@@ -145,8 +145,90 @@ const Ieff = Math.min(sec.Iy, sec.Iz);
   const EI = steel.E * sec.Iz, k = Math.sqrt(P / EI);
   near('P-delta sway of a cantilever column', r.u[6 * 8], Hf * (Math.tan(k * L) - k * L) / (k ** 3 * EI), 2e-3);
 }
+{ // the direct analysis: the same column at 1.6 times its loads with its stiffness at 0.8, the forces divided back
+  // by 1.6 (solved as 0.5 K + Kg against the loads themselves). Exact sway with EI* = 0.8 EI under 1.6 P and
+  // 1.6 H, and the moment at the foot H L + P times that sway.
+  const L = 12, P = 6e5, Hf = 2e4, c = column([0, 1, 0], L, 8, fixed, null, P);
+  const loads = new Float64Array(6 * c.nodes.length); loads[6 * 8] = Hf; loads[6 * 8 + 1] = -P;
+  const M = prepare(c.nodes, c.members), r = solveCases(M, [{ loads }], { N: c.N, kScale: 0.5, gScale: 1 }).cases[0];
+  const EI = 0.8 * steel.E * sec.Iz, k = Math.sqrt(1.6 * P / EI), sway = 1.6 * Hf * (Math.tan(k * L) - k * L) / (k ** 3 * EI);
+  near('direct analysis at 1.6 x the loads and 0.8 EI: sway', r.u[6 * 8], sway, 2e-3);
+  near('direct analysis: moment at the foot, divided back by 1.6', Math.abs(r.forces[0].f[5]), Hf * L + P * sway, 2e-3);
+}
 
-// ---- the profile solver against a dense one, on a frame big enough to have a real profile
+// ---- springs: a foot on a rotational spring, two frames joined by a connector
+{ // a cantilever column on a rotational spring c at its foot, pushed sideways: H L^3 / 3 E I + H L^2 / c
+  const L = 10, Hf = 1e5, EI = steel.E * sec.Iz, c = 2 * EI / L, nodes = [{ p: [0, 0, 0], fix: [1, 1, 1, 1, 1, 0], spring: [0, 0, 0, 0, 0, c] }, { p: [0, L, 0] }];
+  const loads = new Float64Array(12); loads[6] = Hf;
+  const r = solveCases(prepare(nodes, [m(0, 1)]), [{ loads }]).cases[0];
+  near('column on a rotational spring: sway', r.u[6], Hf * L ** 3 / (3 * EI) + Hf * L * L / c);
+  near('column on a rotational spring: the spring\'s moment', Math.abs(r.reactions[5]), Hf * L);
+  // and it buckles at P with kL tan kL = c L / E I (here 2: kL = 1.0769)
+  let lo = 0.5, hi = 1.5; for (let i = 0; i < 60; i++) { const a = (lo + hi) / 2; if (a * Math.tan(a) < c * L / EI) lo = a; else hi = a; }
+  const cc = column([0, 1, 0], L, 8, [1, 1, 1, 1, 1, 0], null, 1e5); cc.nodes[0].spring = [0, 0, 0, 0, 0, c];
+  for (const nd of cc.nodes) if (!nd.fix) nd.fix = [0, 0, 1, 1, 1, 0];
+  near('column on a rotational spring: buckling load', buckling(prepare(cc.nodes, cc.members), cc.N).lambda * 1e5, EI * (lo / L) ** 2, 3e-3);
+  // a vertical spring: the foot settles by what it carries over its stiffness
+  const s = solveCases(prepare([{ p: [0, 0, 0], fix: [1, 0, 1, 1, 1, 1], spring: [0, 2e9, 0, 0, 0, 0] }, { p: [0, L, 0] }], [m(0, 1)]), [{ loads: Float64Array.from({ length: 12 }, (_, i) => (i === 7 ? -4e6 : 0)) }]).cases[0];
+  near('a foot on a vertical spring settles', -s.u[1], 4e6 / 2e9);
+  near('...and the spring holds it up', s.reactions[1], 4e6);
+}
+{ // two equal cantilevers side by side, their tips joined by a stiff connector along x: a push on one is shared
+  // equally; with a connector as stiff as one cantilever, the pushed one carries two thirds
+  const L = 8, Hf = 1e5, EI = steel.E * sec.Iz, kc = 3 * EI / L ** 3;
+  for (const [k, want] of [[1e6 * kc, 0.5], [kc, 2 / 3]]) {
+    const nodes = [{ p: [0, 0, 0], fix: fixed }, { p: [0, L, 0] }, { p: [3, 0, 0], fix: fixed }, { p: [3, L, 0] }], d = [1, 0, 0];
+    const conn = { a: 1, b: 3, spring: [[k, [...d, 0, 0, 0, ...d.map(v => -v), 0, 0, 0]]] };
+    const loads = new Float64Array(24); loads[6] = Hf;
+    const r = solveCases(prepare(nodes, [m(0, 1), m(2, 3), conn]), [{ loads }]).cases[0];
+    near(`a connector ${want === 0.5 ? 'far stiffer than' : 'as stiff as'} the cantilevers: the pushed one's share`, Math.abs(r.reactions[0]) / Hf, want, 2e-3);
+  }
+}
+
+// ---- imposed strains: warming
+{ // a bar held at both ends, warmed 25 K: it pushes on them with E A alpha dT
+  const L = 10, eps = 12e-6 * 25, M = prepare([{ p: [0, 0, 0], fix: fixed }, { p: [L / 2, 0, 0] }, { p: [L, 0, 0], fix: fixed }], [m(0, 1), m(1, 2)]);
+  const r = solveCases(M, [{ loads: new Float64Array(18), strains: new Map([[0, [eps, 0, 0]], [1, [eps, 0, 0]]]) }]).cases[0];
+  near('a bar warmed between two walls: its push', r.forces[0].N, -steel.E * sec.A * eps);
+  near('...and it does not move', r.u[6], 0);
+  // free at one end it grows by alpha dT L and pushes on nothing
+  const F = solveCases(prepare([{ p: [0, 0, 0], fix: fixed }, { p: [L, 0, 0] }], [m(0, 1)]), [{ loads: new Float64Array(12), strains: new Map([[0, [eps, 0, 0]]]) }]).cases[0];
+  near('a bar warmed, free at one end: it grows', F.u[6], eps * L);
+}
+{ // a cantilever warmer on one side (curvature kappa): free, its tip rises kappa L^2 / 2 and nothing is stressed;
+  // built in at both ends it stays straight and the walls bend it back with E I kappa
+  const L = 6, kap = 1e-4;
+  for (const [s, idx, I, sign] of [[[0, kap, 0], 1, sec.Iz, 1], [[0, 0, kap], 2, sec.Iy, 1]]) {
+    const free = solveCases(prepare([{ p: [0, 0, 0], fix: fixed }, { p: [L, 0, 0] }], [m(0, 1)]), [{ loads: new Float64Array(12), strains: new Map([[0, s]]) }]).cases[0];
+    near(`warmed on one side, free (${idx === 1 ? 'v' : 'w'}): its tip moves`, sign * free.u[6 + idx], kap * L * L / 2);
+    near(`warmed on one side, free (${idx === 1 ? 'v' : 'w'}): no moment`, Math.abs(free.forces[0].f[idx === 1 ? 5 : 4]), 0, 1e-6);
+    const held = solveCases(prepare([{ p: [0, 0, 0], fix: fixed }, { p: [L / 2, 0, 0] }, { p: [L, 0, 0], fix: fixed }], [m(0, 1), m(1, 2)]), [{ loads: new Float64Array(18), strains: new Map([[0, s], [1, s]]) }]).cases[0];
+    near(`warmed on one side, built in (${idx === 1 ? 'v' : 'w'}): its moment`, Math.abs(held.forces[0].f[idx === 1 ? 5 : 4]), steel.E * I * kap);
+    near(`warmed on one side, built in (${idx === 1 ? 'v' : 'w'}): it stays straight`, held.u[6 + idx], 0);
+  }
+}
+
+// ---- natural frequency
+{ // a light cantilever with a mass m at its tip: f = sqrt(3 E I / (L^3 m)) / 2 pi
+  const L = 7, mass = 5e4, nodes = [{ p: [0, 0, 0], fix: fixed }, { p: [0, L, 0] }], M = prepare(nodes, [m(0, 1)]);
+  const r = solveCases(M, [{ loads: new Float64Array(12) }]), mm = new Float64Array(12); mm[6] = mass;
+  near('natural frequency of a mass on a cantilever', modes(M, r.FK, mm).hz, Math.sqrt(3 * steel.E * sec.Iz / (L ** 3 * mass)) / (2 * Math.PI), 1e-4);
+}
+
+// ---- the steel: what yield a plate has, by its thickness (EN 10025-6 for S690QL, EN 10025-2 for S355)
+{
+  near('S690QL plate 40 mm', grade(MATERIAL.alloy, 0.04).fy / 1e6, 690);
+  near('S690QL plate 80 mm', grade(MATERIAL.alloy, 0.08).fy / 1e6, 650);
+  near('S690QL plate 140 mm', grade(MATERIAL.alloy, 0.14).fy / 1e6, 630);
+  near('S355 plate 12 mm', grade(MATERIAL.s355, 0.012).fy / 1e6, 355);
+  near('S355 plate 120 mm', grade(MATERIAL.s355, 0.12).fy / 1e6, 295);
+  const s = SECTION.box(3, 2, 0.3);                    // a 300 mm wall is made of plies, none thicker than is rolled
+  near('a 300 mm wall of S690QL is three plies of 100 mm', plies(s, MATERIAL.alloy).n, 3);
+  near('...each yielding at 650 MPa', plies(s, MATERIAL.alloy).fy / 1e6, 650);
+  near('a 40 mm wall is one plate', plies(SECTION.box(1, 1, 0.04), MATERIAL.alloy).n, 1);
+}
+
+// ---- the sparse solver against a dense one, on a frame big enough to be cut by the nested dissection
 {
   // a braced lattice tower, leaning and twisted, with rods and beams, loaded every which way
   const nodes = [], members = [], lv = 14, rnd = (() => { let s = 7; return () => (s = (s * 16807) % 2147483647) / 2147483647; })();
@@ -165,7 +247,7 @@ const Ieff = Math.min(sec.Iy, sec.Iz);
   const sparse = solveFrame(nodes, members, loads), dense = denseSolve(nodes, members, loads);
   let err = 0, big = 0;
   for (let i = 0; i < dense.length; i++) { err = Math.max(err, Math.abs(sparse.u[i] - dense[i])); big = Math.max(big, Math.abs(dense[i])); }
-  near('profile solver against the dense one (largest difference / largest displacement)', err / big, 0, 1e-9);
+  near('sparse solver against the dense one (largest difference / largest displacement)', err / big, 0, 1e-9);
 }
 { // two members side by side between the same two nodes (a doubled bar): twice as stiff, and the ordering
   // must still number each node once
@@ -214,7 +296,7 @@ const Ieff = Math.min(sec.Iy, sec.Iz);
 console.log(failed ? `${failed} failed` : 'all passed');
 process.exit(failed ? 1 : 0);
 
-// The old dense solver, kept here as the reference the profile solver is checked against.
+// The old dense solver, kept here as the reference the sparse solver is checked against.
 function denseSolve(nodes, members, loads) {
   const n = nodes.length, dof = new Int32Array(6 * n).fill(-1), framed = new Uint8Array(n);
   for (const mm of members) if (!mm.axial) { framed[mm.a] = 1; framed[mm.b] = 1; }

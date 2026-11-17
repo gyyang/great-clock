@@ -106,10 +106,10 @@ export const PLATES = [
     id: 'towers', title: 'The Towers', at: [3.0, 0, 31.4], yaw: face(-1, 0), mount: 'stand',
     what: 'What carries the wheels: a steel tower under each arbor, six in all, standing on the building\'s raft.',
     how: [
-      'Each tower is two A-frames of steel box sections, one either side of its arbor\'s wheels, strutted together wherever a strut can pass between them. Where a leg of one tower crosses a leg of the next, the two are pinned together (13 links), so the six are one frame. They weigh 70,600 t and stand on pedestals on a concrete raft 6 m thick.',
-      'Under the clock\'s weight they give a long way (the third arbor\'s bearings 190 mm), so every bearing seat is built high by its computed movement and the wheels settle onto their line. The game checks all this itself: type __game.check() in the browser\'s console and it analyses every member, buckling included, and looks for any part that runs into another.',
+      'Each tower is two A-frames of steel box sections, one either side of its arbor\'s wheels, strutted together wherever a strut can pass between them. Where a leg of one tower crosses a leg of the next, the two are pinned together (15 links), so the six are one frame. They weigh 64,700 t and stand on pedestals of reinforced concrete (two, under the minute wheel\'s tower, of steel) on a concrete raft 8 m thick.',
+      'Under the clock\'s weight they give a long way (the third arbor\'s bearings 148 mm), so every bearing seat is built high by its computed movement and the wheels settle onto their line. The game checks all this itself: type __game.check() in the browser\'s console and it analyses every member, buckling included, and looks for any part that runs into another.',
     ],
-    look: 'the stone pedestal ahead of you, and the great wheel\'s tower rising from it to the arbor 125 m up.',
+    look: 'the concrete pedestal ahead of you, and the great wheel\'s tower rising from it to the arbor 125 m up.',
     now: null,
   },
   {
@@ -199,7 +199,7 @@ export const PLATES = [
     id: 'lookout', title: 'The Lookout', at: [71.0, HOIST.stops[2], 59.3], yaw: Math.PI, mount: 'stand', out: true,
     what: 'The open stage at the top of the right-hand stair tower, 315 m up, with an arcade on every face.',
     how: [
-      'The stair and the hoist both come up here, over the mansard\'s flat. Each face is an arcade with a parapet at sill height and an iron grille in each arch. Above, under the spire, is a closed stage reached by a ladder through a hatch: in this tower it holds the hoist\'s sheaves, and in the other a tank that gives the hose reels their head of water.',
+      'The stair and the hoist both come up here, over the mansard\'s flat. Each face is an arcade with a parapet at sill height and an iron grille in each arch. Above is a closed stage reached by a ladder through a hatch, with the hoist\'s sheaves (in the other tower, a tank that gives the hose reels their head of water). Over that, in the foot of the spire, a 243 t block of steel hangs on four rods, tuned to swing with the tower: when the eddies the wind sheds would rock it, dashpots on the block take the swing out.',
       'Below lies the town, generated from a seed: five districts whose street grids meet at odd angles, terraces round their yards with a chimney stack on every party wall, mills with saw-tooth roofs, gasworks, churches, a domed civic building, and a river with three bridges. The wind here blows mostly off the river, across the front of the building.',
     ],
     look: 'the river and its three bridges, and the square in front of the portal, 315 m below.',

@@ -46,7 +46,7 @@ async function main() {
     if (!o.isMesh) return;
     const m = Array.isArray(o.material) ? o.material[0] : o.material;
     if (!m.isMeshStandardMaterial || m === MAT.dial || m === MAT.ground || m.userData.outdoor) return;   // the town is outside the dial light's reach
-    o.castShadow = true; o.receiveShadow = true;
+    o.castShadow = !o.geometry.userData.noShadow; o.receiveShadow = true;
   });
 
   const bl = bobLanding();

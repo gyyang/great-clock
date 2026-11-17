@@ -51,6 +51,7 @@ class Spinner {
   constructor(p, axis) {
     this.group = new THREE.Group(); this.group.position.copy(p); G.scene.add(this.group); G.machines.push(this.group);
     this.base = new THREE.Quaternion().setFromUnitVectors(ZAXIS, axis); this.q = new THREE.Quaternion(); this.k = 0; this.c = 0;
+    this.group.quaternion.copy(this.base);        // (laid along its axis from the start, so that what plans round it sees it where it is)
   }
   set(angle) { this.group.quaternion.copy(this.base).multiply(this.q.setFromAxisAngle(ZAXIS, angle)); }
 }
@@ -126,7 +127,7 @@ export const ROPE = (() => {
 // push with MAINT.set of the weight's torque, and the stops carry the rest. While the weight is wound they drive the
 // wheel on with that, falling as they open over MAINT.travel to what the going train takes in still air. What reaches
 // the frame's detent is their push, not the weight's (world/structure.js 1c).
-export const MAINT = { r: 8.2, travel: 0.55, set: 0.7 };
+export const MAINT = { r: 8.2, travel: 0.55, set: 0.9 };
 // ---- the train's brake: a copper disc (conductivity sigma, thickness d) between magnets r out. An eddy-current brake's
 // drag rises with speed only up to the disc's critical speed, about 2 / (mu0 sigma d); past it, it falls. The disc is
 // thin enough for that to be well above the speed it runs at, so that a train running fast is braked harder.
@@ -475,8 +476,9 @@ export function buildClockwork() {
   // back. Between them is Harrison's maintaining power. The arbor's ratchet does not push the wheel itself but a
   // second, loose ratchet ring, through clicks; the ring pushes the wheel through springs, which the weight keeps
   // compressed. While the arbor is being turned back a detent on the frame stops the ring following it, and the
-  // springs go on pushing the wheel (MAINT): set up against stops, they push with seven tenths of the weight's torque,
-  // enough to drive the train in still air for half as long again as a winding takes. The weight hangs on four ropes
+  // springs go on pushing the wheel (MAINT): set up against stops, they push with nine tenths of the weight's torque
+  // (the weight keeps them pressed home, the stops taking the last tenth), enough to drive the train in still air for
+  // half as long again as a winding takes. The weight hangs on four ropes
   // from an equalising beam (ROPE).
   const wx = ARBOR.great.x - WIND.barrelR, WH = WIND.weightH, weightKg = cylinderMass(WIND.weightR, WH, MATERIAL.castIron), fall = TAU * WIND.barrelR / 28800;      // m/s: one turn of the barrel in eight hours
   let weight, collar, lever, trip, placeWeight;
@@ -564,7 +566,7 @@ export function buildClockwork() {
       for (let y = 0.3; y < C.h; y += 0.6) { const band = new THREE.Mesh(new THREE.CylinderGeometry(ro + 0.02, ro + 0.02, 0.04, 8).rotateY(Math.PI / 8), MAT.iron); band.position.set(wx, y, 27); G.scene.add(band); }
       G.world.createCollider(R.ColliderDesc.cylinder(C.h / 2, C.r).setTranslation(wx, C.h / 2, 27));
       // declared: it stands on the raft (what it would put there in stopping the weight is in the check, ROPE)
-      assembly('weight crib', 'oak crib under the driving weight\'s fall, standing on the floor').member([wx, 0, 27], [wx, C.h, 27], SECTION.bar(2 * C.r, 2 * C.r), { ...MATERIAL.steel, rho: 0, steel: false }, 'beam', 'crib')
+      assembly('weight crib', 'oak crib under the driving weight\'s fall, standing on the floor').member([wx, 0, 27], [wx, C.h, 27], SECTION.bar(2 * C.r, 2 * C.r), { ...MATERIAL.oak, rho: 0 }, 'beam', 'crib')
         .mass([wx, C.h / 2, 27], ROPE.area * C.h * 750, 'oak').rest([wx, 0, 27], 'ground', 'fix');
     }
     const _wp = new THREE.Vector3();
@@ -782,8 +784,9 @@ export function buildClockwork() {
     // every line shaft that wants trestles under it, and the pushes of its bevels on the trestle nearest each (the cross
     // shaft has a trestle under every bearing: neither end is over a wheel)
     const toArr = (v) => v.toArray().map(c => -c);
-    WINDGEAR.shafts = [{ A1: A1.toArray(), d: d.toArray(), kg: WINDGEAR.lineKg, bearings: WINDGEAR.lineBearings, load: 1, ends: [{ t: len - 2.7, push: toArr(fLine) }] },
-      { A1: A2.toArray(), d: WEST.toArray(), kg: cylinderMass(lineR, span) + 2 * 5e3, bearings: [4.6, span / 2, span - 4.6], load: 0, jib: false, ends: [{ t: 2.7, push: toArr(fCrossR) }, { t: span - 2.7, push: toArr(fCrossL) }] }];
+    // (and for the structure, each shaft's radius and length and what it carries along it, [t, kg]: its wheels)
+    WINDGEAR.shafts = [{ A1: A1.toArray(), d: d.toArray(), kg: WINDGEAR.lineKg, bearings: WINDGEAR.lineBearings, load: 1, ends: [{ t: len - 2.7, push: toArr(fLine) }], r: lineR, len, masses: [[0, 4e3], [len, 5e3]] },
+      { A1: A2.toArray(), d: WEST.toArray(), kg: cylinderMass(lineR, span) + 2 * 5e3, bearings: [4.6, span / 2, span - 4.6], load: 0, jib: false, ends: [{ t: 2.7, push: toArr(fCrossR) }, { t: span - 2.7, push: toArr(fCrossL) }], r: lineR, len: span, masses: [[0, 5e3], [span, 5e3]] }];
     WINDGEAR.stands = [];
     // The arbor: the two halves of the weight's pull at the rim are a couple, which turns it and the barrel and lifts the
     // weight; the worms' turning forces push the wheel along the arbor, both the same way, into its thrust collar at the
@@ -866,7 +869,7 @@ export function buildClockwork() {
     meshBevels(h2, DOWN, shaft, dB, TAU / 18);
     solidCyl(new THREE.Vector3(A1.x, A1.y, A1.z - 1.9), new THREE.Vector3(A1.x, A1.y, A1.z - len), 0.22); solidCyl(new THREE.Vector3(A1.x, A1.y, A1.z - 0.5), new THREE.Vector3(A1.x, A1.y, A1.z - 1.9), 1.15);
     spinners.push(shaft);
-    WINDGEAR.shafts.push({ A1: A1.toArray(), d: dB.toArray(), kg: cylinderMass(0.2, len) + 14e3, bearings: [2.5, 11, 20, 29, 38, len - 9.4, len - 3.9], load: 0.15 });       // (the last is between the two pulleys)
+    WINDGEAR.shafts.push({ A1: A1.toArray(), d: dB.toArray(), kg: cylinderMass(0.2, len) + 14e3, bearings: [2.5, 11, 20, 29, 38, len - 9.4, len - 3.9], load: 0.15, r: 0.2, len, masses: [[0, 4e3], ...belts.map(z => [FLOOR.h2.z - z, 5e3])] });       // (the last is between the two pulleys)
     // crossed belts, which turn the wheels the opposite way to the shaft: the way that takes the near side up
     G.tag = 'bearing';
     for (const z of belts) for (const sg of [-1, 1]) beam('rail', [A1.x, A1.y + sg * L.pulley, z + sg * 0.07], [xm, L.yb - sg * pulleyR, z + sg * 0.07], 0.03, 0.4);
@@ -1050,7 +1053,7 @@ export function buildClockwork() {
     return { crank, kg: kg.reduce((a, b) => a + b, 0), floor, winder, lift: weightKg * GRAV * windSpeed / WIND.efficiency / crank };
   })();
 
-  // The power budget. The weight's fall is all the power the going train has; it is spent turning 84,000 t of
+  // The power budget. The weight's fall is all the power the going train has; it is spent turning the
   // wheels in their bearings, keeping the pendulum swinging, and in the teeth.
   POWER.budget = () => {
     const rate = STEP / 10, kgOn = (name) => assembly(`arbor ${name}`).masses.reduce((t, q) => t + q.kg, 0) + cylinderMass(SHAFT[name].r, SHAFT[name].z[1] - SHAFT[name].z[0], MATERIAL.alloy);

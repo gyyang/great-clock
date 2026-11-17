@@ -41,7 +41,7 @@ the page in `dist/`. Every push to `main` is tested, built and published to the 
 - **Remontoire** – the going train weighs tens of thousands of tonnes and could not stop and start every ten seconds, so it does not. It turns without stopping. On the end of its last arbor is a differential whose arm carries a 185 kg weight, and that weight is the only thing that ever turns the escape wheel, against the wheel's inertia and the fly's drag. Each step lets the arm drop; the train, coming on steadily behind, raises it again. The arm's height sets a brake on the train (a copper disc turning between magnets), so the train keeps pace with the escapement on average and the hands sweep. The disc is 35 mm thick: under the magnets it moves at 0.37 m/s, and an eddy-current brake's drag rises with speed only up to about 2/(μ₀σd), 0.78 m/s for this disc (a 120 mm disc would be past it); 0.17 T across the poles takes the brake's 16 kW. (The magnets are still drawn fixed; in the simulation the arm sets the brake through the train's rate.) If the train ever falls more than two steps behind, the arm lies on its banking, the escape wheel has nothing to turn it, and the escapement stops.
 - **Gear train** – every wheel's angle is derived from the train's last arbor through its tooth counts. That arbor turns once a minute; 12:96 and 16:120 bring that to once an hour at the centre arbor, and 10:80 to once in eight hours at the great wheel. Cannon pinion → minute wheel → hour wheel is 12:1. The hands show your local time because the train drives them. The big wheels are fabricated, not cast: a steel centre of box arms and a box ring, and a rim of bronze segments bolted to it with steel joint plates (the great wheel 7,410 t); the hour pipe is steel plate. Every arbor runs in a bearing either side of its heavy wheel, and the centre arbor in a third, in the boss of the dial's frame; each is checked in rotating bending for the turns of a century (the escape arbor 53 million) at the stress range the weight and the teeth give it. The **hands** are steel lattice spines (3.0 m and 2.2 m deep at the root, tapering to 0.4 m), clad in painted copper; in a 1.9 kPa wind on their faces the chords work at 110 MPa and the tips move 0.63 and 0.38 m, and they keep 0.6 m between them and 2.7 m off the dial's frame. Each is balanced inside the hall by a lens of iron on a bar off its arbor or pipe (57 t at 9 m, 41 t at 8 m). Edge on, the wind twists the centre arbor with 5.6 MN m; what the weight gives it after friction (9.3 MN m) must be at least 1.5 times that, and that is what sets the weight.
 - **Steam engine** – a double-acting cylinder on a slider-crank. Steam is admitted for the first 40 % of each stroke and then expands; the crank torque follows from the linkage geometry and works against a 12 000 t·m² flywheel and what it turns, which is worked out from what is there: the floor train, 12,300 t on roller thrust bearings, and the line shaft, 185 kN m at the crank (222 kW) all the time; and the rest of the winding gear, which is put in only while it winds (192 s in every 34 minutes), 3 kN m to turn it and 364 kN m to lift the weight through the worms. On average the engine gives 264 kW. The engine's speed *is* the speed of the floor wheels.
-- **Winding** – the clock is driven by a 2,565 t weight hanging from a barrel on the great wheel's arbor, and the engine's job is to wind it up again. The weight hangs on **four steel ropes**, 240 mm, 6 x 36 with a steel core, from an **equalising beam** (a main beam and two pair beams, so each rope carries its quarter): each breaks at 40.2 MN, 6.4 times its share; the barrel, 10 m across, is 41.7 rope diameters, and has a groove for each rope, 3.7 turns, two of them dead. If the ropes or the train ever let it go, it falls at most 53 m onto a **crib** of oak baulks laid crosswise, 13 m high and 7.8 m across the flats, which crushing at 5 MPa over half its height takes 1,640 MJ against the 1,510 MJ it would bring. The floor wheels are the first part of the winding gear: the idler carries a mitre wheel, a line shaft runs from it across the floor to a crown wheel at the foot of an upright shaft, and a cross shaft takes the drive on to the crown wheel of a second. The two uprights stand either side of the 80-tooth winding wheel on the arbor, 127 m tall, and each carries a worm level with the arbor, at three o'clock and nine, so that the weight's pull at the rim is shared between them: one worm is pushed up and the other down, the arbor feels a pure couple, and each half goes straight down its own shaft to a thrust bearing on the floor. The winding wheel is a hobbed worm wheel, phosphor-bronze segments on a steel centre, rated 9.8 MN a worm against the 7.9 they push. The worms' lead is 5.2° and their friction 0.06, so they are 60 % efficient and can be driven backward (34 %): what holds the weight is never the worms but the clicks of the going ratchet. The weight falls 1.1 mm a second as the clock runs; when it has fallen two metres a dog collar on the line shaft locks on its pinion, which otherwise runs loose on the shaft's end (the floor clutch, on the fast side where the torque is least), and puts the winding gear in; a second clutch takes the winding wheel onto the arbor, and the weight is hauled back at 10 mm a second: 192 s at the engine's governed speed (about 200, as the governor lets it slow under the load). At the top the floor clutch comes out first; the worms run back until a click holds the weight (the trip is set just past where a click drops home, so the weight settles only by its clearance), and only then, unloaded, does the wheel's clutch come out. Between windings the line shaft turns, but its pinion, the uprights, the worms and the cross shaft stand. While it is wound the great wheel is kept driven by Harrison's **maintaining power**: the arbor's ratchet drives a loose ring through clicks, the ring drives the wheel through four leaf springs 8.2 m out, and a detent on the frame holds the ring while the arbor turns back. The springs are set up against stops: pressed home, as the weight keeps them, they push with 70 % of its torque and the stops take the rest; while it winds they drive the train on, falling as they open to the 41 % the train takes in still air after 307 s, half as long again as a winding. That leaves little for the wind on the hands meanwhile: in a gale a winding can hold the hands back until it is done. The detent takes only the springs' push, 11.4 MN. **If it is not wound** (stop the engine), the maintaining springs run the train for five minutes, then the train stops, the remontoire's arm runs down onto its banking and the escapement stops; the pendulum swings on, free, dying away over hours. Start the engine and it winds, the train takes up the arm again and the escapement starts on the next swing; if the pendulum has stopped, `__game.clock.start()` swings it by hand. The clock says what it is doing in the line at the foot of the screen.
+- **Winding** – the clock is driven by a 2,565 t weight hanging from a barrel on the great wheel's arbor, and the engine's job is to wind it up again. The weight hangs on **four steel ropes**, 240 mm, 6 x 36 with a steel core, from an **equalising beam** (a main beam and two pair beams, so each rope carries its quarter): each breaks at 40.2 MN, 6.4 times its share; the barrel, 10 m across, is 41.7 rope diameters, and has a groove for each rope, 3.7 turns, two of them dead. If the ropes or the train ever let it go, it falls at most 53 m onto a **crib** of oak baulks laid crosswise, 13 m high and 7.8 m across the flats, which crushing at 5 MPa over half its height takes 1,640 MJ against the 1,510 MJ it would bring. The floor wheels are the first part of the winding gear: the idler carries a mitre wheel, a line shaft runs from it across the floor to a crown wheel at the foot of an upright shaft, and a cross shaft takes the drive on to the crown wheel of a second. The two uprights stand either side of the 80-tooth winding wheel on the arbor, 127 m tall, and each carries a worm level with the arbor, at three o'clock and nine, so that the weight's pull at the rim is shared between them: one worm is pushed up and the other down, the arbor feels a pure couple, and each half goes straight down its own shaft to a thrust bearing on the floor. The winding wheel is a hobbed worm wheel, phosphor-bronze segments on a steel centre, rated 9.8 MN a worm against the 7.9 they push. The worms' lead is 5.2° and their friction 0.06, so they are 60 % efficient and can be driven backward (34 %): what holds the weight is never the worms but the clicks of the going ratchet. The weight falls 1.1 mm a second as the clock runs; when it has fallen two metres a dog collar on the line shaft locks on its pinion, which otherwise runs loose on the shaft's end (the floor clutch, on the fast side where the torque is least), and puts the winding gear in; a second clutch takes the winding wheel onto the arbor, and the weight is hauled back at 10 mm a second: 192 s at the engine's governed speed (about 200, as the governor lets it slow under the load). At the top the floor clutch comes out first; the worms run back until a click holds the weight (the trip is set just past where a click drops home, so the weight settles only by its clearance), and only then, unloaded, does the wheel's clutch come out. Between windings the line shaft turns, but its pinion, the uprights, the worms and the cross shaft stand. While it is wound the great wheel is kept driven by Harrison's **maintaining power**: the arbor's ratchet drives a loose ring through clicks, the ring drives the wheel through four leaf springs 8.2 m out, and a detent on the frame holds the ring while the arbor turns back. The springs are set up against stops: pressed home, as the weight keeps them, they push with 90 % of its torque and the stops take the last tenth, which keeps them home; while it winds they drive the train on, falling as they open to the 41 % the train takes in still air after 307 s, half as long again as a winding, and still giving 59 % when a winding ends. What they give over the train's need is all there is for the wind on the hands meanwhile: in a gale a winding can still hold the hands back until it is done. The detent takes only the springs' push, 14.7 MN. **If it is not wound** (stop the engine), the maintaining springs run the train for five minutes, then the train stops, the remontoire's arm runs down onto its banking and the escapement stops; the pendulum swings on, free, dying away over hours. Start the engine and it winds, the train takes up the arm again and the escapement starts on the next swing; if the pendulum has stopped, `__game.clock.start()` swings it by hand. The clock says what it is doing in the line at the foot of the screen.
 - **Governor** – flyballs lifted by centrifugal force against gravity throttle the steam, holding 11.5 rev/min. Watch them bob with each stroke.
 - **Boiler** – pressure falls as the engine draws steam and recovers as the fire catches up; shut the regulator and the safety valve lifts at 6 bar.
 - **You** – a dynamic rigid body (Rapier). Your feet can only push with friction (μ·g), which is also all that holds you on a turning gear: stand too far out on the flywheel and it throws you. Falling has air drag (terminal ≈ 55 m/s).
@@ -102,7 +102,8 @@ window lights a room or a stair you can walk to, and every doorway has its doors
   face, a parapet at sill height and an iron grille in each arch. Over it, under the spire, a closed stage aired by
   louvres and reached by a ladder through a hatch: in the right tower the hoist's sheave room, in the left a tank
   that gives a head of water to the hose reels in the lookouts, on the bridges and in the lamp room, filled by the
-  engine's feed pump through a rising main up the corner of the well.
+  engine's feed pump through a rising main up the corner of the well. Over that, in the foot of each spire, hangs the
+  tower's damper (see Wind on slender stacks).
 - **The escape stairs** – a sixteen-sided turret on the back wall at each back corner, brick on a steel frame, under
   a conical cap to 304 m. Inside, a square stair round a well whose corners are four steel columns, three turns to a
   storey, with a door onto the back gallery at every level, one into the attic and one to the street.
@@ -147,152 +148,184 @@ leave a crate where the foot of the pendulum's rod sweeps the floor.
 ## Does it stand up?
 
 By calculation, and the game checks itself. The aim is a building that could actually be built. `__game.check()`
-in the browser console runs the whole thing (about 3 s) and returns `{ ok, clashes, rows, extra, terminal, text }`;
-at present `ok` is true, with no clashes, whether the design is grown from nothing or from the seed.
+in the browser console runs the whole thing (one to two seconds) and returns `{ ok, clashes, rows, extra, terminal, text }`.
+At present `ok` is **true**: every row passes and nothing clashes, and that stays so through a winding and at every
+clock position tried. That is not the same as nothing left to do (see *What is not right yet*).
 
 **What is analysed is what is drawn.** As each part is drawn it also declares what it is structurally: its members
 with their real sections and materials, the masses it carries, the loads put on it, and what it rests on. The
 stone is weighed from the stone facade.js actually draws (each face's parts, overlaps counted once), the brick
 from the panels, the dial from its glass. The check then does an engineer's load take-down over the whole scene.
 
-- **The analysis** (`src/structure/solve.js`). Each frame is solved as a 3-D frame by the stiffness method: a
-  sparse (skyline) LDLᵀ factorisation in reverse Cuthill–McKee order, which finds a mechanism rather than returning
-  numbers for one. Everything that works together is one frame: the six towers with the links between them, the four
-  walls with their wind trusses and the ring over the dial, each crossing with its deck. Second order: the geometric
-  stiffness of every member's axial force is added, and each frame's elastic critical load factor is found by a
-  Lanczos iteration and confirmed by factorising K + 2.5 K_g (Sylvester's inertia: positive definite means it does
-  not buckle below 2.5 times its loads). Moments are amplified by the P-Δ that follows. Ties that would have to push
-  are dropped and the frame solved again. There is no effective-length guess anywhere: what holds a member is found.
-- **The loads.** Dead weight (steel, brick, stone, the dial, the crown, the clock's wheels); the pendulum's swing
-  (its reaction at the head, both ways); the push of the teeth at every mesh; the winding (the worms' pushes on the
-  wheel and down their shafts, the bevel wheels', the barrel's pull, the detent holding the maintaining ring and the ring's push back on the arbor); wind from all four directions at 1.9 kPa with pressure
-  and suction coefficients, internal pressure and suction, and wind on the crown, the lamp room, the stair towers, the
-  turrets and the stack. They are combined as
-  they can occur together (stopped; going or winding, with the pendulum at either end of its swing; wind from each
-  direction with pressure or suction inside), each with every frame leaning 1 in 200 the same way as an erection
-  tolerance, and every member is checked at working stress against the worst: axial force with buckling, bending
-  both ways, shear and torsion together, the slenderness of its plates, and fatigue for what is loaded every beat or
-  every winding.
-- **The design loop** (`src/world/structure.js`). Plan the members' places, each tested for clearance at the
-  largest size it may grow to; analyse; enlarge whatever is overworked, or too flexible, within the room it was
-  planned for; repeat (up to fourteen passes from nothing). A frame that would buckle too soon has the members
-  grown that do most to hold it for their weight (their share of the buckled shape's strain energy per tonne), so
-  that where the members that matter most are already as big as their room allows, the frame is made stiff where it
-  can be rather than heavy where it cannot. A tower whose bearing moves too far has the members grown that hold that
-  bearing (that frame's legs, ties and braces when it moves in the frame's plane), designed with a fifth in hand
-  under the pendulum's swing, which comes back every beat. The sizes are the ones the loads asked for, and a member that
-  cannot grow any more is reported, not hidden. The sizes it converges to are kept, in the browser and in
-  `src/structure/design.json` for a first visit, tied to a fingerprint of the plan and of the loads that are not
-  fixed in code (the stone as drawn, the brick); the next load starts from them and still analyses everything before
-  anything is drawn, so a seed only saves the passes. Nothing is ever made smaller, so a seed that no longer holds is
-  grown like any other start, and one for another plan or other loads is not used at all. Ready in 2 to 3 s.
-- **Interference.** Every structural solid is tested against everything else: wheels, arbors, walkways, the engine,
-  every drawn part with or without a collider, the members of the other frames, and the drawn surface of the
-  machinery itself (every vertex, bolt and rivet), and whatever is under a floor wheel's rim, where its teeth will be in
-  a moment if they are not now. Also the spaces that must be empty: the doorway, the headroom over
-  every walkway, through every door and round the lamp. Every door leaf is swung through its whole travel and tested
-  against everything fixed, and the hoist's cage and counterweight, as drawn, are carried through their whole travel
-  in 0.2 m steps (1,576 positions) against everything fixed in the tower.
+- **The analysis** (`src/structure/solve.js`, `src/structure/model.js`). Each frame is solved as a 3-D frame by the
+  stiffness method: a sparse LDLᵀ factorisation in nested-dissection order, which finds a mechanism rather than
+  returning numbers for one. Everything that works together is one frame (52 in all): the six towers with the links
+  between them, the four walls with their wind trusses, the crown, the stair towers and turrets braced to them and
+  the ring over the dial, each crossing with its deck, each line shaft on its bearings. Forces come from the
+  **direct analysis** of AISC 360-16 chapter C: the loads at 1.6 on 0.8 of the stiffness, a notional sideways load of
+  1/200 of the weight in every combination, solved to second order outright where a frame would buckle under less
+  than 9 times its working loads, so that each member is amplified by as much as the frame's modes bend it (a stair
+  tower's own buckling does not amplify the walls it is braced to), and by B2 otherwise (then at most 1.29); then
+  divided back by 1.6. Each frame's elastic critical load factor is found by
+  a Lanczos iteration and must be at least 4.5 at working load, confirmed by factorising K + 4.5 K_g (Sylvester's
+  inertia); the least are the walls and the towers 4.64, the balcony crossing 7.86. Ties that would have to push are
+  dropped and the frame solved again. There is no effective-length guess anywhere: what holds a member is found.
+- **The steel.** Plate is S690QL (EN 10025-6), its yield falling with thickness (690 MPa to 50 mm, 650 to 100), and
+  none is thicker than 100 mm: a thicker wall is laminated from plies stitched by preloaded M36 bolts 300 mm apart
+  both ways, each ply checked buckling between stitches and the net section through the holes. Mild steel is S235
+  and S355, solid shafts NiCrMoV forgings by ruling section. Every member is checked at working stress against its
+  worst combination: axial force with buckling, bending both ways, shear and torsion together, the slenderness of its
+  plates, and fatigue for what is loaded every beat, every winding or (a shaft) every turn.
+- **The loads.** Its own weight, as drawn; the clock going and being wound (the pendulum's reaction at its head both
+  ways, the push of the teeth at every mesh, the worms', the bevels', the barrel's pull, the maintaining detent);
+  crowds of 5 kPa on every floor, stair, landing, deck and gallery, in 20 m squares, all and alternate; wind to
+  EN 1991-1-4 (vb 25 m/s, terrain II: 1.90 kPa at the walls' head, 2.06 at 380 m) on the walls, the crown and the
+  flat, with the inside at +0.2 or -0.3 and, the dial's glass broken, at 0.9 of the outside on the dial; the frames
+  25 K warmer or colder than the ground, the walls 5 K more across where the sun is; an earthquake of 5 % of the
+  weight sideways (equivalent static); and the sway imperfection of 1/200 in every combination. Warmth moves the
+  meshes apart or together by at most 8.7 mm: that is the backlash the teeth are cut with.
+- **The design loop** (`src/world/structure.js`). Plan the members' places, each tested for clearance at the largest
+  size it may grow to; analyse; enlarge whatever is overworked within the room it was planned for; and for each
+  thing that is not yet good enough (a bearing that moves too far, a crossing too lively up and down or sideways, a
+  stack whose vortices would shed in step with its sway, a wall that moves too far, a frame that would buckle too
+  soon) grow the groups of members that do most for it per tonne: their share of that movement (by virtual work) or
+  of that mode's strain energy. A member already as big as its room allows that still buckles has the frame it
+  buckles with stiffened instead. A measure that three passes of help have not improved by 1 % is stuck (passes in
+  which its frame was still being stiffened against buckling do not count), and is reported, not hidden. When
+  nothing more grows on the quick analysis the loop goes on with the exact one the check runs, and tries again what
+  was stuck. From nothing it converges in 33 passes (of the 40 it may take; about 80 s in a background browser tab),
+  with nothing stuck. The sizes it converges to are kept, in the browser and in `src/structure/design.json` for a
+  first visit, tied to a fingerprint of the plan and of the loads that are not fixed
+  in code; the next load starts from them and confirms them in one pass (planning 1 s, the pass 2 to 4 s, most of
+  it the walls' frame solved to second order). Nothing is ever made smaller, so a seed that no longer holds is grown
+  like any other start, and one for another plan is not used at all.
+- **Interference.** Every structural solid (1,392) is tested against everything else: wheels, arbors, walkways,
+  the engine, every drawn part with or without a collider, the members of the other frames, and the drawn surface of
+  the machinery itself (112,525 points on 864 parts: every vertex, bolt and rivet), and whatever is under a floor
+  wheel's rim, where its teeth will be in a moment if they are not now. The winding gear's supports are planned
+  against the machinery's drawn surface too. Also the spaces that must be empty: the doorways, the headroom over every walkway and
+  round the lamp. Every door leaf is swung through its whole travel, the hoist's cage and counterweight are carried
+  through theirs, and a lift car right round its loop, each against everything fixed.
 - **Serviceability.** The bearings: under the pendulum and the winding a bearing may move no more than 5 mm and an
-  arbor's two bearings no more than 1 in 2000 across it. The worst is the great arbor's, 4.2 mm while the weight is
-  wound (the maintaining detent holding the springs' push, below); the pendulum's own suspension moves 2.7 mm as it
-  swings. Under the clock's own weight the towers move a long way (third 190 mm, minute 177, centre 170, great 15,
-  escapement 12, pivot 4), so **the bearing seats are pre-set**: each is set high and over by its computed movement,
-  and the wheels land on line. What is left to the 50 mm of shims is what that computation may be out by, taken as a
-  tenth of it (at most 19 mm); the weight wound up or run down makes no difference. With the preset every pair of
-  meshing wheels is at its drawn centre distance (without it the great wheel and centre pinion would be 48 mm out). The walls: no more than L/500 out of their plane in the wind,
-  their heads no more than H/500 along it.
-- **Foundations.** One raft of reinforced concrete under the whole building, 6 m thick. Each tower's foot on a
-  pedestal sized for the concrete under its bearing plate with a tenth in hand (two feet close together share one,
-  on a grillage); each wall column on a steel grillage cast into the raft's top, 9.4 m along the wall and up to 6.9 m
-  in. The two stair towers, the two escape turrets and the stack stand outside the raft, each on a footing of its own
-  as big as its plan (504 m² each stair tower, 246 m² each turret, 449 m² the stack) with each column on a grillage in
-  its top; they put 66,500 t and 66,900 t (the left and right stair towers: the right carries the hoist), 27,000 t
-  (each turret) and 20,600 t (the stack) on the rock, 1.5 MPa at worst. Punching of every base through the raft is
-  checked to EN 1992-1-1 6.4.4(2) (at worst 88%). The rock is taken as strong rock at 4.0 MPa, the usual
-  presumed bearing value for strong limestone or hard sandstone: **that is a requirement of the site, to be proved by
-  investigation**. Against it the raft puts 0.9 MPa on the rock on average and 3.6 MPa under the worst foot (a column
-  of the left wall). The winding uprights stand on pedestals 3 m square; the one whose worm
-  pulls it up is held down by its own weight (12.2 MN against a pull of 7.4) and by eight headed rods 4 m deep in the
-  raft, checked for the pull at 1.5 less the weight at 0.9 and for the bevels' push at its foot (EN 1993-1-8 for the
-  rods, EN 1992-4 for the cone of concrete they would pull out).
+  arbor's two bearings no more than 1 in 2000 across it. The pendulum's own suspension moves 4.0 mm as it swings; the
+  great arbor's moves 4.6 mm while the weight is wound. Under the clock's own weight the towers move a
+  long way (the third's bearing 148 mm, the minute's 91, the centre's 84), so **the bearing seats are pre-set**: each
+  is set high and over by its computed movement and the wheels land on line; left to the 120 mm shim packs is a
+  quarter of that, what the computation may be out by (at most 37 mm). With the preset every pair of meshing wheels
+  is at its drawn centre distance (without it the great wheel and centre pinion would be 43 mm out). The walls: no
+  more than L/500 out of their plane in the wind, their heads no more than H/500 along it (the worst, the back,
+  247 mm of 284).
+- **People walking.** Each crossing's deck is hung on rods from its trusses and braced in plan. Up and down every deck
+  is above 2.6 Hz, out of what walking excites (Setra 2006). Sideways, a crowd locks in to a deck that sways between
+  0.5 and 1.2 Hz, each person a negative damping of 300 Ns/m (Dallard et al. 2001, the Millennium Bridge): a deck in
+  that band must not lock in under a person a square metre (Setra class I), its own damping taken as 0.5 %. The
+  centre and between crossings sway at 0.61 and 0.53 Hz, so each carries a **tuned pendulum damper** under its deck
+  at mid span, drawn: a steel block on four rods with two dashpots, 7.0 t tuned to 0.59 Hz and 5.8 t to 0.52 Hz
+  (Den Hartog's tuning, the pair's stability by Routh–Hurwitz), sized for a quarter more people than the deck holds.
+- **Line shafts.** Each winding line shaft is a frame of its own on its bearings, which stand on trestles (or a post
+  where a trestle's legs will not stand) placed under its bearings, in any span too long and beside a wheel that
+  overhangs too far. A shaft may sag no more than 1/1200 of a span (0.01 inch to the foot, the old rule for line
+  shafting), an end no more than 1/1200 of twice its length (at worst 43 %), and is checked in rotating bending for
+  a hundred million turns.
+- **Wind on slender stacks.** The escape turrets (0.65 Hz) are stiff enough that their vortices would shed in step
+  with their sway only above 1.25 times the strongest mean wind at their heads (EN 1991-1-4 E.1.3.1); the stack (0.21
+  Hz) and the stair towers (0.27 and 0.26 Hz, in step at 49 and 48 m/s against 42 at their heads) are not, and are
+  checked for it (E.1.5.2). The stack sways 23 mm. Each stair tower carries a **tuned pendulum damper** in the foot of
+  its spire, drawn and in the model: a steel block on four rods 3.7 m long, with four dashpots to the rails round it,
+  on a frame of girders, posts and a head (43 t) resting on the tower's top; 219 t and 243 t (2.1 and 2.4 % of the
+  mode's mass), tuned to 0.26 Hz (Den Hartog), the lightest that keeps the sway's push within the wind with a
+  twentieth in hand. Its damping, as a decrement (0.32 and 0.34, from the pair's response at its peak), is added to
+  the structure's 0.07 (F.5): they sway 93 and 95 mm, their inertia 59 kN/m at the head against the 62 of wind they
+  are designed for. Where the heaviest block that fits (301 t) would not do, the tower's steel is grown for its sway
+  and the block sized again: here, from 14,500 t to 22,400 and 21,100.
+- **Foundations.** One raft of reinforced concrete under the whole building, **8 m thick**. Each tower's foot on a
+  pedestal sized for the concrete under its base plate: 19 of the 21 are **reinforced concrete**, two (under the
+  minute tower) blocks of steel on grillages cast into the raft where no concrete pedestal would fit; feet close
+  together share one. Each wall column stands on a steel grillage cast into the raft's top, 9.4 m along the wall and
+  up to 7.1 m in (two neighbouring columns would share one where one alone reached too far in; none does). The
+  stair towers, the turrets and the stack stand outside the raft on footings of their own (504, 246 and 449 m²). Every footing is designed for every
+  combination with the moments and the push the analysis hands down: its base plate on grout with anchors round its
+  edge (2,240 bars of grade 10.9, AISC Design Guide 1), the anchors' pull taken down by reinforcement (EN 1992-4),
+  sliding (friction 0.2 with 1.5 in hand), punching (EN 1992-1-1 6.4.4, at worst 76 %), and the raft as a strip on
+  the rock under the heaviest feet (Hetényi, 78 % of its strength at 0.5 % steel). The raft and all it carries,
+  1,315,000 t, put 1.1 MPa on the rock on average and 4.0 under the worst foot; outside it, 84,300 and 82,100 t under
+  the stair towers, 31,000 t under each turret and 28,400 t under the stack, 2.0 MPa at worst. The rock is taken as strong
+  rock, 4.0 MPa and a modulus of 15 GPa, the feet standing on it as springs so that the analysis settles them:
+  **that is a requirement of the site, to be proved by investigation**. The upright shaft whose worm pulls it up is
+  held down by its weight and eight headed rods 4 m deep in the raft.
+- **Ties, braces, connections.** Every girder of the walls is a horizontal tie round the building and every column
+  a vertical one (EN 1991-1-7 A.5, A.6, at worst 8 %). The 554 braces and ties from frame to frame carry what the
+  analysis gives them, at least 2 % of the push in what they hold, and are stiff enough to hold it (AISC 360-16
+  appendix 6). Checked joints: the feet, the bearing seats on their shims, the hangers' pins, the laminations'
+  stitches; the links between towers and the struts are pinned and checked as members.
 
 `npm test` checks the solver against textbook cases: cantilevers, torsion, P-Δ, Euler buckling in several
 restraints and orientations, the sparse solver against a dense one, doubled members, mechanisms, links in
 compression, and load paths through assemblies.
 
 **The wheels stand on towers.** The wheels are fabricated, bronze segments on steel centres: the great wheel 7,410 t;
-the arbors and all they carry, the weight included, about 35,000 t. Under each arbor stands a tower of two A-frames of alloy-steel box sections (450 MPa), one in the gap
-either side of the arbor's wheels, strutted together wherever a strut can pass between the wheels. Where a leg of
-one tower crosses a leg of another in the next gap, the two are bolted through a pinned link (13 of them), so the
-six towers are one frame. A frame's feet stand at least an eighth of its height apart, and a fifth where a tower can
-have it. A foot is kept far enough from a floor wheel for its pedestal to stand clear of the teeth. The towers weigh
-70,600 t (escapement 1,400, pivot 26,300, third 4,600, centre 6,700, great 25,000, minute 6,600); their least critical
-load factor is 2.70.
+the arbors and all they carry, the weight included, about 35,000 t. Under each arbor stands a tower of two A-frames of
+S690QL box sections, one in the gap either side of the arbor's wheels, tied across and braced in plan wherever a
+member can pass between the wheels, and their feet pinned in the frame's plane. Where a leg of one tower passes
+within 8 m of a leg of another, the two are joined by a pinned link (15 of them), so the six towers are one frame.
+The towers weigh **64,700 t** (escapement 1,500, pivot 11,400, third 5,400, centre 18,100, great 10,600, minute
+17,700), the upright shafts 1,125 t each; their least critical load factor is 4.64. The centre arbor runs in three
+bearings, the third in the boss of the dial's frame (10,500 t).
 
-**The winding gear puts nothing on the towers.** The two worms share the weight's pull, 7.9 MN each, pushing the
-rim opposite ways 18 m apart, so the arbor is turned by a couple and its bearings are asked for nothing but the worms'
-end-thrust along it (2.4 MN, into the thrust collar at the front bearing). Each worm's half goes down its own upright
-to the floor: the left-hand one in compression, the right-hand one in tension. Both shafts are solid steel 1.2 m
-through, 1,125 t each: the left-hand one can be steadied only below and above the driving weight's fall (arms from
-the great tower's front legs at 36 m and 90 m), and over the 54 m between, a shaft a metre through would buckle at
-2.4 times its push; at 1.2 m it is 4.2 (the check works it to 60%). The teeth also push each worm off the wheel,
-2.9 MN, opposite ways on the two sides: each upright runs in a radial bearing just above its worm and one just below,
-and the four are tied together by a **yoke**, a rectangle in the plane of the tower's front frame between the barrel
-and the winding wheel, bolted over and under the front bearing, with an arm forward from each corner to a bearing; the
-worms' end-thrust closes through it to the same bearing. So both pairs of forces close in the yoke, and the tower
-carries only its weight. The uprights stretch and shorten about 4 mm under their halves: that is lost motion in the
-drive as each winding begins (the wheel turns two minutes of arc less), not a bearing moving. The clutch lever's
-pivot stands on a post from an arm under the wheel's rim, off a tie across the front frame. The maintaining detent,
-which holds the maintaining ring for the 192 s of a winding, is a solid steel slab 2.0 m deep and 1.2 m thick right
-across the great tower's back frame, 9.4 m below the arbor, with a pawl block 2.0 m wide bolted over its face, behind
-the ring where nothing goes round; nothing carried round on the great arbor passes through it in a whole turn. It
-holds the maintaining springs' push, 11.4 MN at the ring's teeth: the springs are set up against stops, so that is
-all that can reach it (the springs' full stroke would push with 16 MN, which the tower could not take without its
-bearing moving more than 5 mm). The ring pushes back on the arbor as hard, so the tower is asked for a couple, not a
-force; even so it is what moves a bearing most while winding (the great arbor's, 4.2 mm).
+**The winding gear puts nothing on the towers but a couple.** The two worms share the weight's pull, 7.9 MN each,
+pushing the rim opposite ways 18 m apart, so the arbor is turned by a couple and its bearings are asked for nothing
+but the worms' end-thrust along it (2.4 MN, into the thrust collar at the front bearing). Each worm's half goes down
+its own upright to the floor: the left-hand one in compression, the right-hand one in tension. Both shafts are solid
+steel 1.2 m through, steadied from the great tower's front legs below and above the driving weight's fall. The teeth
+also push each worm off the wheel; each upright runs in a radial bearing above and below its worm, and the four are
+tied by a **yoke** in the plane of the tower's front frame, bolted over and under the front bearing, so those forces
+close in it too. The uprights stretch and shorten about 4 mm under their halves: lost motion in the drive as each
+winding begins, not a bearing moving. The maintaining detent, which holds the maintaining ring for the 192 s of a
+winding, is a beam across the great tower's back frame below the arbor, with a pawl bolted over its face; it holds
+the springs' push, 14.7 MN at the ring's teeth, and the ring pushes back on the arbor as hard, so the tower is asked
+for a couple, not a force. Down the back frame's legs, which are thin where they pass between the wheels, that couple
+would rock the tower's head; so the back frame has a **head beam** over the arbor, 1.6 m deep, carrying the bearing's
+pillow block, and two struts 1.6 by 0.9 m from its middle down to the detent's ends, clear of all that turns: the
+couple closes in that triangle, and the great bearing moves 4.6 mm while the weight is wound.
 
 **The shell is a braced steel frame with brick between.** Columns every 10 m, a girder at every 30 m level carrying
 the storey of brick above it and a shelf for the storey of stone in front, so that no brick or stone carries more
 than one storey of itself (0.8 and 1.0 MPa). The brick panels are **diaphragm walls**: 2 m overall as drawn, two
-450 mm leaves joined by 330 mm cross-ribs every 1.5 m, which is 57% of the brick of a solid wall; the wind check
-bends them with that real section. Half way up each storey (or near it) a horizontal wind truss runs round the
-inside of the walls (along the back, the stairs' bracket just above it is tied from above to leave it room), and one
-more at the wall head: 34 trusses, 640 members, each tested for clearance. They carry the wind on a wall to the walls
-either side of it, which take it down to the ground by their bracing. A steel ring as wide as the wall carries the
-front over the dial. The attic's floor is a concrete slab on the top truss; its walls stand on the wall line, and
-the slab, standing in from it, twists the top girders, which is carried. Over it the **crown**: a steel post on every
-column head, a ring at the eaves, and a two-tier truss across on every column line of the front and back, with
-rafters, hips, purlins and a girder round the slopes half way up (26,650 t of steel, 38,200 t of brick and stone on
-it). The lamp room's drum stands on eight joints of the trusses on a circle under it, and its floor's inner half on
-a frame of its own (four posts at the corners of the stair's well and a column under the lamp). The stair towers
-(11,400 t of steel each) and the escape turrets (3,900 t each) are steel frames of their own, carrying their brick
-storey by storey as the walls do and braced to the shell's walls; the stack (1,900 t) stands free on its own
-footing, its frame a ring at every stone band. The walls' frames are 289,000 t of steel and their wind trusses
-49,700 t; with 199,000 t of stone on the faces (weighed from what facade.js draws; it counts each face's brick as if
-it had no openings, which is on the safe side for the glazed sides), the brick and the crown, the raft and what it
-carries put 1,162,000 t on the rock.
+450 mm leaves joined by 330 mm cross-ribs every 1.5 m; the wind check bends them with that real section. Half way up
+each storey (or near it) a horizontal wind truss runs round the inside of the walls, and one more at the wall head:
+34 trusses, 640 members, each tested for clearance, carrying the wind on a wall to the walls either side of it. A
+steel ring as wide as the wall carries the front over the dial. Over the attic the **crown**: a steel post on every
+column head, a ring at the eaves, a two-tier truss across on every column line, rafters, hips, purlins and a girder
+round the slopes. The stair towers and escape turrets are steel frames of their own, carrying their brick storey by
+storey and braced to the walls and the crown; the stack stands free on its own footing. Steel: the walls' frames
+204,500 t, their wind trusses 19,200 t, the crown 26,400 t, the stair towers 22,400 and 21,100 t (with their dampers'
+frames, 43 t each), the turrets 5,700 t each, the stack 1,800 t. With 199,000 t of stone on the faces and the brick,
+the building puts 1,315,000 t on the rock under the raft.
 
-**The hoist is in the model.** Its hoistway is a frame of its own: four corner posts and the guides, with a beam
-across the well at every storey from the tower's back wall to its front, carrying the fence, the guides and the
-landing gates (λ 17). The sheaves' beams in the sheave room carry each sheave with both falls of its rope, the
-cage loaded (1.8 t and ten people) or the counterweight; the left tower's tank is on beams in its stage. These rest
-on the stair towers' frames, which carry them to their footings. The drum and the engine stand on stone beds on the
-tower's floor.
+**The hoist is in the model.** Its hoistway is a frame of its own: corner posts and the guides, with a beam across
+the well at every storey carrying the fence, the guides and the landing gates. The sheaves' beams in the sheave room
+carry each sheave with both falls of its rope, the cage loaded or the counterweight; the left tower's tank is on beams
+in its stage. These rest on the stair towers' frames. The drum and the engine stand on stone beds on the tower's floor.
 
 **Does it go?** The check also draws up a power budget. The driving weight's fall is all the power the going
 train has: 27 kW. Turning the wheels takes 8.3 kW in the arbors' bearings and 2.5 kW in the teeth; winding the
 remontoire takes 0.4 kW, of which 0.3 kW is all that ever reaches the pendulum; the brake takes the other 16 kW.
-The weight is sized for the wind on the hands; in still air that margin is what the brake throws away. That is with roller bearings (friction 0.003). In plain oiled
-journals, at these loads and this slowly, the friction would be thirty times that and the clock would stop.
+The weight is sized for the wind on the hands; in still air that margin is what the brake throws away. That is with
+roller bearings (friction 0.003). In plain oiled journals, at these loads and this slowly, the friction would be
+thirty times that and the clock would stop.
 
-Not covered: earthquake, the connections themselves, the raft as a plate, erection, temperature, and one moving
-part against another except where it is said to be (the detent against what turns past it, the escapement's legs
-and stops, a lift car carried right round its loop against everything it passes, its own chain wheels included, the
-hoist's cage and counterweight over their travel, and every door leaf through its swing). The stairs and galleries in
-the hall, the lift cage and the pendulum landings are drawn by tower.js but are not in the model; the stairs in the
-stair towers and the turrets are, their bearers and stringers members of their frames, and the lamp room's as weights
-on its floor.
+**Assumptions** worth knowing, since they decide sizes: the towers' feet are pinned in their frames' plane; a link between two towers' legs is a pinned 0.8 m box, used where the legs are within
+8 m; an escape stair stands on its own columns, its bearers sliding in pockets in the turret's wall, so it hands the
+turret only its sideways push; a crowd on a deck is a person a square metre, 70 kg each, and the deck's own damping
+0.5 %; a line shaft turns a hundred million times in its life; the driving weight's crib is oak baulks crushing at
+5 MPa; a frame resting on another (a stair, a walkway) is held only in the ways its seat holds it; the crossings
+hang on vertical rods; the earthquake is 5 % of the weight; the rock is strong rock.
+
+Not covered: fire, erection, a wind-tunnel test (a building this size wants one), and one moving part against
+another except where it is said to be (the detent against what turns past it, the escapement's legs and stops, a
+lift car round its loop, the hoist's cage and counterweight over their travel, every door leaf through its swing).
+The stairs and galleries in the hall, the lift cage and the pendulum landings are drawn by tower.js but are not in
+the model; the stairs in the stair towers and the turrets are, their bearers and stringers members of their frames.
 
 ## What is not right yet
 
@@ -301,13 +334,11 @@ still send back. They are as it stands, not hidden by the check passing.
 
 The clock:
 
-- **The line shafts are short of bearings.** Where a trestle could not be placed the planner leaves it out, so the
-  main line shaft runs 26 m between two of its bearings: about 110 mm of sag and 93 MPa of bending that reverses
-  every turn, by hand calculation. The cross shaft and one other are short too. No row of the check looks at it.
 - **The two worms are not equalised.** Each is meant to take half the weight's pull at the winding wheel's rim;
   nothing shares it between them as they wear.
-- **The maintaining springs stop at 70 %** of the weight's drive (the tower that holds the detent could not take
-  the whole within its 5 mm), so in a gale a winding can hold the hands back.
+- **The maintaining springs stop at 90 %** of the weight's drive, the stops taking the last tenth so that they stay
+  pressed home; while a winding lasts that leaves the wind on the hands less than the weight leaves it, and in a gale
+  a winding can hold the hands back.
 - **Drawn or modelled only in part:** the clutch's trip is described as timed to the clicks but is not simulated;
   the 50 mm buffer behind the escapement's stops is assumed, not drawn; the brake's magnets have no carriage to set
   them by; there is no landing from which to reach the pendulum's rating tray; the crib that would catch the weight
@@ -316,19 +347,19 @@ The clock:
 
 The structure:
 
-- **The steel.** The towers and walls are sized in a quenched and tempered steel of 900 MPa yield at any thickness.
-  It is made in plate up to about a tenth of the thickest drawn here.
-- **Stability** is shown at 2.5 times the working loads with feet taken as fully fixed; the stair towers, turrets
-  and lamp room lean on the shell without their weight being in its stability. A stricter analysis (factored
-  loads on reduced stiffness) finds the clock's towers short of what it asks.
-- **Wind on the foundations** of the hall, a broken dial as a load case, uplift on the roof, and the stack in a
-  steady wind (vortex shedding) are not checked. Two of the crossings sway sideways at a pace a walking crowd
-  could find.
-- **Pedestals** are drawn in stone and checked as concrete.
-- **The sizing does not settle from nothing** inside its fourteen passes: the side walls' wind trusses are still
-  being enlarged when it stops, for a movement that hardly answers. The check passes on what it stops at; the
-  design kept in `design.json` is the settled one, about three times as many passes on.
-- And what is listed above as not covered: connections, fire, earthquake, temperature, erection, the raft as a plate.
+- **The stair towers' dampers** are tuned to the towers as computed; a real one is tuned on the built tower, and its
+  dashpots are taken as linear. Strakes, which would cost the spire its outline, were not tried.
+- **Laminated plate.** The heaviest members are built of up to five plies of 100 mm. Each ply, and the net section
+  through the stitches, is checked; that the plies act as one, the preloaded stitches never slipping under the shear
+  between them, is assumed.
+- **Connections** other than the feet, the bearing seats, the hangers' pins and the stitches are taken as full
+  strength, not designed. The loss of a hanger or a wall column has not been analysed.
+- **The earthquake** is 5 % of the weight as a static force, not a site's spectrum, and the wind is the code's
+  where a building this size wants a wind tunnel.
+- **The raft** is checked as a strip on the rock under its heaviest feet (78 % of its strength), not as a plate, and
+  the worst foot puts on the rock exactly the 4.0 MPa it is assumed to take.
+- And what is listed above as not covered: fire, erection, and the hall's stairs and galleries, the lift cage and the
+  pendulum landings, which are drawn but not in the model.
 
 ## Layout
 

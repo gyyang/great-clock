@@ -7,7 +7,7 @@ import { surface, keepVisible } from './surface/material.js';
 
 export const G = { scene: null, world: null, R: null, parts: new Map(),
   machines: [], machineFixed: new Set(),
-  clear: [] };       // spaces that have to stay empty: { name, lo, hi }. A doorway, the headroom over a walkway. Nothing is there to collide with, so they are listed.       // every group of moving machinery, and the fixed colliders that stand for shafts turning in place: what the clearance check walks
+  clear: [], walks: [] };       // walks: every deck and flight of stairs drawn, for the structure to carry ({ deck: [x0, x1, z0, z1, y] } or { stair: [a, b, width] }, and who drew it). clear: spaces that have to stay empty: { name, lo, hi }. A doorway, the headroom over a walkway. Nothing is there to collide with, so they are listed.       // every group of moving machinery, and the fixed colliders that stand for shafts turning in place: what the clearance check walks
 export const MAT = {};
 export const TEX = {};
 export const QID = new THREE.Quaternion();
@@ -246,6 +246,7 @@ function makeMaterials() {
   MAT.handrail = surface('brass', { color: 0xc9983f, roughness: 0.8, seed: 4, macro: [0.05, 0.06, 0.8, 0.05] });       // polished by hands
   MAT.brick = surface('brick', { macro: [0.14, 0.06, 0.22, 0.12], wall: [0.1, 1.2, 0.35, 0.18], age: [0.75, 0.75, 0.76, 0.3] });
   MAT.stone = surface('stone', { macro: [0.12, 0.06, 0.3, 0.12], wall: [0.15, 0.8, 0, 0] });
+  MAT.concrete = surface('stone', { color: 0x9c978d, macro: [0.1, 0.06, 0.2, 0.25] });         // the pedestals: reinforced concrete, as they are checked
   MAT.plate = surface('plate', { macro: [0.12, 0.12, 0.13, 0.4], age: [0.8, 0.76, 0.72, 0.2] });
   MAT.grate = S({ map: TEX.grate, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.5, metalness: 0.85 });
   MAT.lattice = S({ map: TEX.lattice, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.5, metalness: 0.8 });
@@ -336,6 +337,11 @@ const UNIT = {
   rod: new THREE.CylinderGeometry(1, 1, 1, 10),                                  // stands on y
   knob: new THREE.IcosahedronGeometry(1, 1),
   stud: new THREE.IcosahedronGeometry(1, 0),
+  // a plain box for fine work laid on a surface (the seams and rows of bolts on a laminated plate): thousands of them,
+  // too thin to throw a shadow worth drawing, so they cast none (main.js)
+  slab: (() => { const g = new THREE.BoxGeometry(1, 1, 1); g.userData.noShadow = true; return g; })(),
+  // and a round one, standing on y, for the small parts of a damper (its rods, its dashpots): no shadow either
+  pin: (() => { const g = new THREE.CylinderGeometry(1, 1, 1, 10); g.userData.noShadow = true; return g; })(),
   cone: new THREE.ConeGeometry(1, 1, 12),
   // masonry for the outside of the tower, each in a unit cube: the head of a blind lancet (a slab with a
   // pointed arch cut up into it), a pyramid on a square base, and a gable
@@ -359,7 +365,7 @@ function push(kind, mat, sx, sy, sz, x, y, z, q) {
   const tilt = Math.min(0.012, 0.008 / Math.max(sx, sy, sz));
   _q.copy(q || QID).multiply(_qj.setFromEuler(_ej.set(wob() * tilt, wob() * tilt, wob() * tilt)));
   b.list.push(new THREE.Matrix4().compose(_p.set(x + wob() * 0.003, y + wob() * 0.002, z + wob() * 0.003), _q, _s.set(sx, sy, sz)));
-  const half = kind === 'box' || kind === 'tread' ? [sx / 2, sy / 2, sz / 2] : kind === 'cyl' || kind === 'rod' || kind === 'cone' ? [sx, sy / 2, sz] : kind === 'tube' ? [sx / 2, sy, sz] : [sx, sy, sz];
+  const half = kind === 'box' || kind === 'tread' || kind === 'slab' ? [sx / 2, sy / 2, sz / 2] : kind === 'cyl' || kind === 'rod' || kind === 'pin' || kind === 'cone' ? [sx, sy / 2, sz] : kind === 'tube' ? [sx / 2, sy, sz] : [sx, sy, sz];
   if (Math.max(half[0], half[1], half[2]) > 0.12) DRAWN.push({ c: [x, y, z], q: _q.clone(), half, tag: G.tag || '', on: G.on || '', kind, mat });        // (kind and material, so that what is drawn can be weighed)
 }
 export const ibox = (mat, sx, sy, sz, x, y, z, q) => push('box', mat, sx, sy, sz, x, y, z, q);
@@ -416,6 +422,7 @@ export function tplane(material, x0, x1, z0, z1, y, tile = 1) {
 // Open-grate deck with a walking surface at height y.
 export function deck(x0, x1, z0, z1, y) {
   const sx = x1 - x0, sz = z1 - z0, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+  G.walks.push({ deck: [x0, x1, z0, z1, y], tag: G.tag || '', on: G.on || '' });
   tplane(MAT.grate, x0, x1, z0, z1, y, 1);
   cbox(sx, 0.3, sz, cx, y - 0.15, cz);
   // (the rails stand on its edges, and a rising main may stand in a corner: the middle is what has to be clear)
@@ -503,6 +510,7 @@ export function railRun(axis, c, from, to, y, gaps = []) {
 // brackets between two riveted channel stringers. Collides as a smooth ramp.
 export function stair(a, b, width, rails = [true, true]) {
   const f = frame(a, b);
+  G.walks.push({ stair: [a, b, width], tag: G.tag || '', on: G.on || '' });
   const n = new THREE.Vector3(0, 1, 0).applyQuaternion(f.q);           // normal to the slope
   cbox(f.len, 0.3, width, f.mx - n.x * 0.15, f.my - n.y * 0.15, f.mz - n.z * 0.15, f.q);
   const steps = Math.max(2, Math.round(f.dy / 0.19)), rise = f.dy / steps, run = f.hl / steps;

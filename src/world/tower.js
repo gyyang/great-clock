@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import { G, MAT, QX, ibox, icyl, isph, iknob, cbox, sbox, tbox, tplane, beam, tube, deck, rail, railRun, stair, lamp, cagePanel } from '../kit.js';
 import { TOWER, LEVELS, DIAL, STAIRS, LIFT, BRIDGES, ROOF, DEG, GRAV, bobLanding, ARCH, STAIR_TOWER, ESCAPE, STACK, FLUE, SERVICE, LAMP, PORTAL, GREAT_WINDOW, CRADLE, ENGINE, FLOOR, HOIST } from '../layout.js';
-import { assembly, SECTION, MATERIAL } from '../structure/model.js';
+import { assembly, SECTION, MATERIAL, LIVE, liveCase } from '../structure/model.js';
 import { doorway } from './doors.js';
 import { EDGES, LAMP_FLOOR } from './structure.js';
 import { traceryBays, lightsOf, opening } from './facade.js';
@@ -235,13 +235,13 @@ function latticeGirder(name, y, z, width, wallAt = null) {
   const bar = (a, b, side, label) => { beam('iron', a, b, side, side); A.member(a, b, tubeOf(side), alloy, 'beam', label); };
   beam('iron', [x0, top, z], [x1, top, z], 0.2, 0.14); A.member([x0, top, z], [x1, top, z], SECTION.box(0.2, 0.14, 0.014), alloy, 'beam', 'top chord');
   A.member([x0, lo, z], [x1, lo, z], SECTION.box(0.42, 0.18, 0.02), alloy, 'beam', 'bottom chord');           // the deck's edge beam (drawn by deck())
-  const first = Math.ceil((x0 - ROOF.purlins[0]) / PANEL), deckLoad = (120 + 400) * width / 2;                // kg per metre of edge: grating and beams, and a crowd
+  const first = Math.ceil((x0 - ROOF.purlins[0]) / PANEL), deckLoad = 120 * width / 2, crowd = LIVE.q * width / 2;        // per metre of edge: grating and beams (kg), and a crowd (N, not permanent)
   for (let i = first; ROOF.purlins[0] + i * PANEL < x1; i++) {
     const xa = Math.max(x0, ROOF.purlins[0] + i * PANEL), xb = Math.min(x1, ROOF.purlins[0] + (i + 1) * PANEL), k = ((i % 4) + 4) % 4;
     bar([xa, lo, z], [xa, top, z], 0.1, 'vertical');
     if (k < 2) bar([xa, top, z], [xb, lo, z], 0.1, 'diagonal'); else bar([xa, lo, z], [xb, top, z], 0.1, 'diagonal');
     if (k === 0) ibox('iron', 0.34, 0.3, 0.02, xa, top - 0.1, z);                           // gusset where a hanger takes the load
-    A.mass([xa, lo, z], deckLoad * (xb - xa), 'deck');
+    A.mass([xa, lo, z], deckLoad * (xb - xa), 'deck').force([xa, lo, z], [0, -crowd * (xb - xa), 0], 'a crowd on the deck', liveCase([xa, lo, z]));
   }
   A.rest([x0, lo, z], 'shell left').rest([x1, lo, z], 'shell right', 'yz');              // by way of the side galleries; one end fixed, the other free to slide
   // an edge that runs along a wall sits on corbels built into it, wherever there is wall to build into
@@ -454,14 +454,16 @@ function wellStair({ U, V, M, w, levels, land, laps, splits = [null, null, null,
 }
 
 // The bearers and stringers of a stair declared: the bearers built into the frame `on` (at a column or a girder of it,
-// within its reach), each stringer pair one member along its strip's middle, carrying the treads and a crowd on them.
-const STAIR_KG_M2 = 120 + 400;
-function declareStair(W, name, on, note, bearer = SECTION.box(0.4, 0.2, 0.012)) {
-  const A = assembly(name, note), st = MATERIAL.steel, stringer = SECTION.box(0.4, 0.2, 0.012);
-  for (const b of W.bearers) { A.member(b.root, b.tip, bearer, st, 'beam', 'bearer'); A.rest(b.root, on, 'fix'); }
+// within its reach; `hold`: what the wall holds them in, 'fix' built in, 'xz' only sideways, in a pocket that lets them
+// slide up and down in it), each stringer pair one member along its strip's middle, carrying the treads (STAIR_KG_M2) and a
+// crowd on them (LIVE: not permanent, and in the 20 m square it is in).
+const STAIR_KG_M2 = 120;
+function declareStair(W, name, on, note, bearer = SECTION.box(0.4, 0.2, 0.012), hold = 'fix', stringer = SECTION.box(0.4, 0.2, 0.012)) {
+  const A = assembly(name, note), st = MATERIAL.steel;
+  for (const b of W.bearers) { A.member(b.root, b.tip, bearer, st, 'beam', 'bearer'); A.rest(b.root, on, hold); }
   for (const c of W.chains) for (let i = 0; i < c.pts.length - 1; i++) {
     const p = c.pts[i], q = c.pts[i + 1], lift = (pt) => [pt[0], pt[1] - 0.45, pt[2]];
-    A.member(lift(p), lift(q), stringer, st, 'beam', 'stringers', null, STAIR_KG_M2 * c.w * GRAV);
+    A.member(lift(p), lift(q), stringer, st, 'beam', 'stringers', { lines: { [liveCase(p.map((v, k) => (v + q[k]) / 2))]: [0, -LIVE.q * c.w, 0] } }, STAIR_KG_M2 * c.w * GRAV);
   }
   return A;
 }
@@ -578,8 +580,10 @@ function stage(W, sx, U, V) {
 // ---- the escape stairs, in the turrets at the back corners
 // A square stair inside each round turret, three turns to a storey (six up to the attic, which is twice as high), with a
 // door at every storey's landing onto the hall's back gallery, one into the attic at the top, and one to the street at
-// the foot. Its well's four corners are columns, from the floor to the attic's landing, tied to the turret's frame at
-// every storey: the corner landings' bearers reach from them to the wall.
+// the foot. Its well's four corners are columns, from the floor to the attic's landing, which carry it: its bearers lie
+// in pockets in the turret's wall that hold them sideways and let them slide up and down, so that the stair and the
+// turret, each shortening under its own weight, do not load each other; the corner landings' bearers reach from the
+// columns to the wall, and the columns are tied to the turret's frame at every storey.
 function escapeStair() {
   const E = ESCAPE, h = E.half, w = E.w, ri = E.r - E.wall, top = E.levels[E.levels.length - 1];
   for (const sx of [-1, 1]) {
@@ -588,15 +592,16 @@ function escapeStair() {
     const gap = [[E.x + h - E.door[1], E.x + h - E.door[0]]];
     // (the square's corners stand just inside the round wall; a bearer reaches out from a side to the wall)
     const W = wellStair({ U: 2 * h, V: 2 * h, M, w, sw: w - 0.15, levels: E.levels, land: 2 * h, laps: (r) => (r > 40 ? 6 : 3), name: `${side} escape`, open: gap,
-      reach: (k, s) => Math.sqrt(ri * ri - (s - h) ** 2) - h - 0.05 });
+      reach: (k, s) => Math.sqrt(ri * ri - (s - h) ** 2) - h - 0.05, bearerSize: [0.5, 0.25] });
     W.flat([0, 2 * h, 0, w], top); W.edge(w, w, 2 * h, w, top); W.edge(2 * h, 0, 2 * h, w, top); W.edge(0, 0, 0, w, top);
     W.edge(0, 0, gap[0][0], 0, top); W.edge(gap[0][1], 0, 2 * h, 0, top);
     // the four columns at the corners of the well, from the floor to the attic's landing: the bearers at the corners
     // reach from them to the wall
-    const A = declareStair(W, `stairs, ${side} escape turret`, `escape turret ${side}`, 'the escape stair: four columns at the corners of its well, and the bearers and stringers on them');
+    const A = declareStair(W, `stairs, ${side} escape turret`, `escape turret ${side}`, 'the escape stair: four columns at the corners of its well, and the bearers and stringers on them',
+      SECTION.box(0.5, 0.25, 0.025), 'xz', SECTION.box(0.4, 0.2, 0.02));
     for (const [u, v] of [[w, w], [2 * h - w, w], [2 * h - w, 2 * h - w], [w, 2 * h - w]]) {
-      const [cx, cz] = M(u, v); ibox('iron', 0.36, top - 0.45, 0.36, cx, (top - 0.45) / 2, cz); cbox(0.36, top - 0.45, 0.36, cx, (top - 0.45) / 2, cz); ibox('iron', 0.8, 0.3, 0.8, cx, 0.15, cz);
-      A.member([cx, 0, cz], [cx, top - 0.45, cz], SECTION.box(0.36, 0.36, 0.016), MATERIAL.steel, 'beam', 'column').rest([cx, 0, cz], 'ground', 'fix');
+      const [cx, cz] = M(u, v), cw = 0.4; ibox('iron', cw, top - 0.45, cw, cx, (top - 0.45) / 2, cz); cbox(cw, top - 0.45, cw, cx, (top - 0.45) / 2, cz); ibox('iron', 0.8, 0.3, 0.8, cx, 0.15, cz);
+      A.member([cx, 0, cz], [cx, top - 0.45, cz], SECTION.box(cw, cw, 0.025), MATERIAL.steel, 'beam', 'column').rest([cx, 0, cz], 'ground', 'fix');
       const a = Math.atan2(cz - E.z, cx - ex), ro = (E.r - E.wall / 2) * Math.cos(Math.PI / 8);
       for (const y of E.levels.slice(1)) { const p = [cx, y - 0.45, cz], to = [ex + ro * Math.cos(a), y, E.z + ro * Math.sin(a)]; A.brace(p, 'x', `escape turret ${side}`, to).brace(p, 'z', `escape turret ${side}`, to); }
     }
@@ -667,7 +672,7 @@ function roofTop() {
       rail([pa[0] + (pb[0] - pa[0]) * t0, y, pa[2] + (pb[2] - pa[2]) * t0], pb);
       const ga = [pa[0], y - 0.62, pa[2]], gb = [pa[0] + (pb[0] - pa[0]) * te, y - 0.62, pa[2] + (pb[2] - pa[2]) * te];
       beam('iron', ga, gb, 1.2, 0.22);
-      A.member(ga, gb, SECTION.box(1.2, 0.22, 0.03), MATERIAL.steel, 'beam', 'girder', null, (120 + 400) * w / 2 * GRAV);
+      A.member(ga, gb, SECTION.box(1.2, 0.22, 0.03), MATERIAL.steel, 'beam', 'girder', { lines: { [liveCase(ga)]: [0, -LIVE.q * w / 2, 0] } }, 120 * w / 2 * GRAV);
       A.rest(ga, `stair tower ${sx < 0 ? 'left' : 'right'}`).rest(gb, 'crown', 'xy');
     }
     for (const t of [0, te]) A.member([a[0] + (b[0] - a[0]) * t + n[0], y - 0.62, a[1] + (b[1] - a[1]) * t + n[1]], [a[0] + (b[0] - a[0]) * t - n[0], y - 0.62, a[1] + (b[1] - a[1]) * t - n[1]], SECTION.box(0.4, 0.2, 0.012), MATERIAL.steel, 'beam', 'cross girder');
@@ -736,15 +741,15 @@ function lampRoom() {
   // The floor's frame (the drum takes the outer half of the floor and the gallery: see the crown, structure.js)
   const A = assembly('lamp floor', 'the lamp room\'s floor: four posts at the corners of the stair\'s well, the beams along its edges, and the column under the lamp');
   const post = SECTION.box(0.9, 0.9, 0.03), edge = SECTION.box(1.2, 0.5, 0.03), col = SECTION.box(0.6, 0.6, 0.025), yb = yg - 0.65;
-  const ring = 8 * hp, half = 0.5 * (Math.PI * rf * rf - L.well * L.well) * LAMP_FLOOR * GRAV;
+  const ring = 8 * hp, half = 0.5 * (Math.PI * rf * rf - L.well * L.well) * LAMP_FLOOR * GRAV, crowd = { lines: { [liveCase([0, 0, 0])]: [0, -half / LAMP_FLOOR / GRAV * LIVE.q / ring, 0] } };
   for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { A.member([sx * hp, yt, sz * hp], [sx * hp, yb, sz * hp], post, MATERIAL.steel, 'beam', 'post'); A.rest([sx * hp, yt, sz * hp], 'crown', 'fix'); }
   for (const s of [-1, 1]) {
-    A.member([-hp, yb, s * hp], [hp, yb, s * hp], edge, MATERIAL.steel, 'beam', 'edge beam', null, half / ring);
-    A.member([s * hp, yb, -hp], [s * hp, yb, hp], edge, MATERIAL.steel, 'beam', 'edge beam', null, half / ring);
+    A.member([-hp, yb, s * hp], [hp, yb, s * hp], edge, MATERIAL.steel, 'beam', 'edge beam', crowd, half / ring);
+    A.member([s * hp, yb, -hp], [s * hp, yb, hp], edge, MATERIAL.steel, 'beam', 'edge beam', crowd, half / ring);
   }
   A.member([0, yt, 0], [0, yb, 0], col, MATERIAL.steel, 'beam', 'column').rest([0, yt, 0], 'crown', 'fix');
-  A.member([0, yb, hp], [0, yb, 0], edge, MATERIAL.steel, 'beam', 'bridge', null, 1.6 * LAMP_FLOOR * GRAV);
-  A.mass([0, yb, 0], (2 * pr) ** 2 * LAMP_FLOOR + 30e3, 'the lamp, its lens and its platform');
+  A.member([0, yb, hp], [0, yb, 0], edge, MATERIAL.steel, 'beam', 'bridge', { lines: { [liveCase([0, 0, 0])]: [0, -1.6 * LIVE.q, 0] } }, 1.6 * LAMP_FLOOR * GRAV);
+  A.mass([0, yb, 0], (2 * pr) ** 2 * LAMP_FLOOR + 30e3, 'the lamp, its lens and its platform').force([0, yb, 0], [0, -4 * pr * pr * LIVE.q, 0], 'people on the platform', liveCase([0, 0, 0]));
   // the stair's flights bear on its landings at the corners, and they on the posts
   const corner = [[1, 1], [1, -1], [-1, -1], [-1, 1]];
   for (const o of W.out) { const [sx, sz] = corner[o.k]; A.mass([sx * hp, Math.min(o.yb, yb), sz * hp], 7e3, 'the stair'); }
